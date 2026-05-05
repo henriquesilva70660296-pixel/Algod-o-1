@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
+import pytz
 
 # 1. ATUALIZAÇÃO INSTANTÂNEA (30 segundos)
 st_autorefresh(interval=30 * 1000, key="datarefresh")
@@ -30,6 +32,19 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+def verificar_mercado():
+    # Horário de Brasília
+    tz = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.now(tz)
+    # Mercado de futuros costuma fechar no fim de semana e em janelas à noite
+    if agora.weekday() >= 5:
+        return "🔴 MERCADO FECHADO (Fim de Semana)"
+    # Simplificação: Aberto das 09h às 17h (pode variar por ativo)
+    if 9 <= agora.hour < 18:
+        return "🟢 MERCADO ABERTO"
+    else:
+        return "🟡 MERCADO EM AFTER-MARKET / FECHADO"
+
 @st.cache_data(ttl=0)
 def carregar_dados():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
@@ -43,6 +58,7 @@ def carregar_dados():
 try:
     dados = carregar_dados()
     preco_atual = dados['Algodao'].iloc[-1]
+    status = verificar_mercado()
     
     # 2. INTELIGÊNCIA ARTIFICIAL
     features = ['Algodao', 'Petroleo', 'Dolar', 'SMA_9', 'SMA_21']
@@ -50,8 +66,9 @@ try:
     modelo.fit(dados[features][:-1], dados['Target'][:-1])
     prob = modelo.predict_proba(dados[features].tail(1))[0][1]
 
-    # --- TÍTULO E MÉTRICAS ---
+    # --- TÍTULO E STATUS ---
     st.title("🌱 Cotton Intelligence")
+    st.info(status)
     
     c1, c2, c3 = st.columns(3)
     c1.metric("ALGODÃO", f"${preco_atual:.2f}")
@@ -64,17 +81,24 @@ try:
     if st.session_state.posicao > 0:
         pnl = (preco_atual - st.session_state.preco_entrada) * st.session_state.posicao
         st.sidebar.metric("Lucro/Prejuízo", f"${pnl:.2f}", delta=f"{pnl:.2f}")
+        st.sidebar.write(f"Contratos: {st.session_state.posicao}")
 
-    st.markdown("### Execução Rápida")
+    st.markdown("### Execução Profissional")
+    
+    # NOVO: Campo para quantidade de contratos
+    qtd = st.number_input("Quantidade de Contratos:", min_value=1, value=100, step=50)
+    
     col_b1, col_b2, col_b3 = st.columns(3)
     with col_b1:
-        if st.button("🟢 COMPRAR (1000)"):
-            custo = preco_atual * 1000
+        if st.button("🟢 COMPRAR"):
+            custo = preco_atual * qtd
             if st.session_state.saldo >= custo:
                 st.session_state.saldo -= custo
-                st.session_state.posicao += 1000
+                st.session_state.posicao += qtd
                 st.session_state.preco_entrada = preco_atual
                 st.rerun()
+            else:
+                st.error("Saldo Insuficiente")
     with col_b2:
         if st.button("🔴 VENDER (Zerar)"):
             if st.session_state.posicao > 0:
