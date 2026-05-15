@@ -11,7 +11,8 @@ import feedparser
 from deep_translator import GoogleTranslator
 
 # --- 1. CONFIGURAÇÃO E ESTABILIDADE ---
-st_autorefresh(interval=60 * 1000, key="datarefresh")
+# Atualizado para 44 segundos conforme solicitado (44 * 1000 ms)
+st_autorefresh(interval=44 * 1000, key="datarefresh")
 st.set_page_config(page_title="Cotton Intel Pro", layout="wide")
 
 def init_db():
@@ -27,7 +28,7 @@ def init_db():
 
 init_db()
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=40) # Reduzi o TTL do cache para acompanhar a atualização de 44s
 def carregar_dados_mestre():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
     dfs = {nome: yf.Ticker(t).history(period="1y")['Close'] for nome, t in tickers.items()}
@@ -67,7 +68,6 @@ try:
     volat = df['Volatilidade'].iloc[-1]
     saldo_atual = sqlite3.connect('cotton_intel.db').execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
 
-    # --- SIDEBAR ---
     with st.sidebar:
         st.header("🛡️ Gestão de Risco")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
@@ -75,13 +75,11 @@ try:
         lote = int((saldo_atual * (risco_p/100)) / ((volat * 2) * 100)) if volat > 0 else 100
         st.write(f"Lote Sugerido: **{lote} Ct**")
         st.markdown("---")
-        st.caption("Cotton Intel Terminal v2.5")
+        st.caption("Cotton Intel Terminal v2.6")
 
-    # --- STATUS DO MERCADO ---
     status_label, tempo_label, cor_fundo = get_market_status()
     st.markdown(f'<div class="status-card" style="background-color: {cor_fundo};"><b>{status_label}</b> | {tempo_label}</div>', unsafe_allow_html=True)
 
-    # --- MÉTRICAS DE TOPO ---
     m1, m2, m3 = st.columns(3)
     m1.metric("COT. ALGODÃO", f"${preco_atual:.4f}")
     m2.metric("PETRÓLEO", f"${df['Petroleo'].iloc[-1]:.2f}")
@@ -89,7 +87,6 @@ try:
 
     st.markdown("---")
 
-    # --- PAINEL DE COMANDO (IA + TRADING) ---
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
@@ -127,7 +124,6 @@ try:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- SEÇÕES DE ANÁLISE ---
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar (Traduzido)"])
 
     with tab_g:
@@ -159,3 +155,4 @@ try:
 
 except Exception as e:
     st.info("Sincronizando com a Bolsa de Nova York...")
+
