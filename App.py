@@ -11,7 +11,6 @@ import feedparser
 from deep_translator import GoogleTranslator
 
 # --- 1. CONFIGURAÇÃO E ESTABILIDADE ---
-# Atualizado para 44 segundos conforme solicitado (44 * 1000 ms)
 st_autorefresh(interval=44 * 1000, key="datarefresh")
 st.set_page_config(page_title="Cotton Intel Pro", layout="wide")
 
@@ -28,16 +27,32 @@ def init_db():
 
 init_db()
 
-@st.cache_data(ttl=40) # Reduzi o TTL do cache para acompanhar a atualização de 44s
+@st.cache_data(ttl=40)
 def carregar_dados_mestre():
+    # PASSO 1: Aumento de histórico para 2 anos e novos indicadores[span_3](start_span)[span_3](end_span)
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-    dfs = {nome: yf.Ticker(t).history(period="1y")['Close'] for nome, t in tickers.items()}
+    dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
     df = pd.DataFrame(dfs).ffill().dropna()
+    
+    # Cálculo de Média Móvel (Tendência)[span_4](start_span)[span_4](end_span)
+    df['MA20'] = df['Algodao'].rolling(window=20).mean()
+    
+    # Cálculo de RSI (Força Relativa)[span_5](start_span)[span_5](end_span)
+    delta = df['Algodao'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    df = df.dropna()
     df['Volatilidade'] = df['Algodao'].diff().abs().rolling(14).mean()
     df_norm = (df / df.iloc[0]) * 100
     df['Target'] = (df['Algodao'].shift(-1) > df['Algodao']).astype(int)
-    features = ['Algodao', 'Petroleo', 'Dolar']
+    
+    # IA agora treina com 5 variáveis em vez de 3[span_6](start_span)[span_6](end_span)[span_7](start_span)[span_7](end_span)
+    features = ['Algodao', 'Petroleo', 'Dolar', 'MA20', 'RSI']
     modelo = RandomForestClassifier(n_estimators=100).fit(df[features][:-1], df['Target'][:-1])
+    
     return modelo, df, df_norm, features
 
 def get_market_status():
@@ -75,7 +90,7 @@ try:
         lote = int((saldo_atual * (risco_p/100)) / ((volat * 2) * 100)) if volat > 0 else 100
         st.write(f"Lote Sugerido: **{lote} Ct**")
         st.markdown("---")
-        st.caption("Cotton Intel Terminal v2.6")
+        st.caption("Cotton Intel Terminal v2.7 - IA Passo 1")
 
     status_label, tempo_label, cor_fundo = get_market_status()
     st.markdown(f'<div class="status-card" style="background-color: {cor_fundo};"><b>{status_label}</b> | {tempo_label}</div>', unsafe_allow_html=True)
@@ -94,7 +109,7 @@ try:
         cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.65 else ("#ff4b4b", "VENDA FORTE") if prob < 0.35 else ("#fccf03", "AGUARDAR")
         st.markdown(f"""
             <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
-                <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA</small><br>
+                <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA (ENRIQUECIDA)</small><br>
                 <span style="font-size: 50px; font-weight: 900;">{prob*100:.1f}%</span><br>
                 <b style="font-size: 20px;">{txt_ia}</b>
             </div>
@@ -154,5 +169,5 @@ try:
                 st.markdown(f'<div class="news-card"><b>{n.title}</b></div>', unsafe_allow_html=True)
 
 except Exception as e:
-    st.info("Sincronizando com a Bolsa de Nova York...")
+    st.info("Sincronizando Inteligência Passo 1...")
 
