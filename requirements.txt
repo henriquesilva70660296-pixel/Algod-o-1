@@ -5,5 +5,7 @@ plotly
 scikit-learn
 streamlit-autorefresh
 pytz
+feedparser
+
 
 
