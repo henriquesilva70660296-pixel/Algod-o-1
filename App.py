@@ -5,125 +5,137 @@ import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
+import sqlite3
 import pytz
 
-# 1. CONFIGURAÇÃO
+# 1. CONFIGURAÇÃO E BANCO DE DADOS
 st_autorefresh(interval=30 * 1000, key="datarefresh")
-st.set_page_config(page_title="Cotton Intel | Dinâmico", layout="centered")
+st.set_page_config(page_title="Cotton Intel | Ultimate", layout="centered")
 
-# ESTILO
+def init_db():
+    conn = sqlite3.connect('cotton_intel.db')
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
+    c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL)')
+    c.execute('SELECT saldo FROM conta WHERE id = 1')
+    if not c.fetchone():
+        c.execute('INSERT INTO conta (id, saldo) VALUES (1, 100000.0)')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Funções de Banco de Dados
+def get_saldo():
+    conn = sqlite3.connect('cotton_intel.db')
+    res = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
+    conn.close()
+    return res
+
+def update_saldo(novo_saldo):
+    conn = sqlite3.connect('cotton_intel.db')
+    conn.execute('UPDATE conta SET saldo = ? WHERE id = 1', (novo_saldo,))
+    conn.commit()
+    conn.close()
+
+def save_trade(tipo, entrada, saida, lucro):
+    conn = sqlite3.connect('cotton_intel.db')
+    data = datetime.now().strftime("%d/%m %H:%M")
+    conn.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro) VALUES (?,?,?,?,?)', (data, tipo, entrada, saida, lucro))
+    conn.commit()
+    conn.close()
+
+# ESTILO CSS
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    .stMetric { background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; }
-    .card { background-color: #161b22; padding: 15px; border-radius: 10px; border-left: 5px solid #deff9a; margin-bottom: 10px; }
     .status-box { padding: 10px; border-radius: 5px; text-align: center; font-weight: bold; margin-bottom: 20px; border: 1px solid white; }
+    .card { background-color: #161b22; padding: 15px; border-radius: 10px; border-left: 5px solid #deff9a; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# STATUS DO MERCADO
+# LÓGICA DE MERCADO
 def verificar_mercado():
     tz = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(tz)
-    if agora.weekday() >= 5: return "🔴 MERCADO FECHADO (FDS)", "#4a1010"
-    if 10 <= agora.hour < 17: return "🟢 MERCADO ABERTO (LIVE)", "#104a10"
-    return "🟡 AFTER-MARKET / FECHADO", "#4a4110"
+    if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "#4a1010"
+    return ("🟢 MERCADO ABERTO", "#104a10") if 10 <= agora.hour < 17 else ("🟡 AFTER-MARKET", "#4a4110")
 
-# LOGICA DE DADOS (PRESERVADA)
-if 'saldo' not in st.session_state: st.session_state.saldo = 100000.0  
-if 'posicao' not in st.session_state: st.session_state.posicao = 0      
-if 'preco_entrada' not in st.session_state: st.session_state.preco_entrada = 0.0
-if 'historico_patrimonio' not in st.session_state: st.session_state.historico_patrimonio = [100000.0]
-if 'log_trades' not in st.session_state: st.session_state.log_trades = []
-
-@st.cache_data(ttl=0)
-def carregar_ia():
+@st.cache_data(ttl=60)
+def carregar_dados():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
     dfs = {nome: yf.Ticker(t).history(period="1y")['Close'] for nome, t in tickers.items()}
     df = pd.DataFrame(dfs).ffill().dropna()
-    df['USDA_Estoque'], df['Spread_Petroleo'], df['COT_Sentiment'], df['Weather_Risk'] = 76.4, df['Algodao']/df['Petroleo'], 1, 6.8
+    # Indicadores Técnicos (Média Móvel)
+    df['MA20'] = df['Algodao'].rolling(window=20).mean()
+    df['MA50'] = df['Algodao'].rolling(window=50).mean()
+    # Fundamentos
+    df['USDA_Estoque'], df['Spread'], df['COT'], df['Weather'] = 76.4, df['Algodao']/df['Petroleo'], 1, 6.8
     df['Target'] = (df['Algodao'].shift(-1) > df['Algodao']).astype(int)
-    features = ['Algodao', 'Petroleo', 'Dolar', 'USDA_Estoque', 'Spread_Petroleo', 'COT_Sentiment', 'Weather_Risk']
+    features = ['Algodao', 'Petroleo', 'Dolar', 'USDA_Estoque', 'Spread', 'COT', 'Weather']
     modelo = RandomForestClassifier(n_estimators=100).fit(df[features][:-1], df['Target'][:-1])
     return modelo, df, features
 
 try:
-    modelo, dados, features = carregar_ia()
+    modelo, dados, features = carregar_dados()
     preco_atual = dados['Algodao'].iloc[-1]
     msg_m, cor_m = verificar_mercado()
     
-    # --- TOPO: STATUS ---
+    # UI PRINCIPAL
     st.markdown(f'<div class="status-box" style="background-color: {cor_m};">{msg_m}</div>', unsafe_allow_html=True)
-    
-    st.title("🌱 Cotton Intelligence")
-    
-    # --- CARDS INFO ---
+    st.title("🌱 Cotton Intelligence Pro")
+
+    # CARDS
     c_i1, c_i2 = st.columns(2)
-    with c_i1:
-        st.markdown(f'<div class="card"><small>USDA (ESTOQUE)</small><br><b>76.4M Fardos</b><br><span style="color:#deff9a;">📉 Baixo</span></div>', unsafe_allow_html=True)
-    with c_i2:
-        st.markdown(f'<div class="card" style="border-left-color: #ff4b4b;"><small>CLIMA (TEXAS)</small><br><b>SECA D4</b><br><span style="color:#ff4b4b;">⚠️ Risco Alto</span></div>', unsafe_allow_html=True)
+    with c_i1: st.markdown(f'<div class="card"><small>USDA ESTOQUE</small><br><b>76.4M</b></div>', unsafe_allow_html=True)
+    with c_i2: st.markdown(f'<div class="card" style="border-left-color:orange"><small>CLIMA TEXAS</small><br><b>SECA D4</b></div>', unsafe_allow_html=True)
 
-    # --- MÉTRICAS ---
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ALGODÃO", f"${preco_atual:.2f}")
-    c2.metric("PETRÓLEO", f"${dados['Petroleo'].iloc[-1]:.1f}")
-    c3.metric("DÓLAR", f"{dados['Dolar'].iloc[-1]:.1f}")
+    # MÉTRICAS
+    st.columns(3)[0].metric("ALGODÃO", f"${preco_atual:.2f}")
+    st.columns(3)[1].metric("PETRÓLEO", f"${dados['Petroleo'].iloc[-1]:.1f}")
+    st.columns(3)[2].metric("DÓLAR", f"{dados['Dolar'].iloc[-1]:.1f}")
 
-    # --- IA DINÂMICA COM CORES ---
+    # IA DINÂMICA
     prob = modelo.predict_proba(dados[features].tail(1))[0][1]
-    
-    # Definindo a cor dinâmica
-    if prob > 0.65:
-        cor_sinal = "#deff9a" # Verde
-        texto_sinal = "COMPRA FORTE"
-    elif prob > 0.45:
-        cor_sinal = "#fccf03" # Amarelo
-        texto_sinal = "AGUARDAR / NEUTRO"
-    else:
-        cor_sinal = "#ff4b4b" # Vermelho
-        texto_sinal = "RISCO DE BAIXA"
-
-    st.markdown(f"**Confiança da IA:** <span style='color:{cor_sinal}; font-size:20px;'>{prob*100:.1f}%</span>", unsafe_allow_html=True)
+    cor_sinal = "#deff9a" if prob > 0.6 else "#ff4b4b" if prob < 0.4 else "#fccf03"
+    st.markdown(f"**Confiança da IA:** <span style='color:{cor_sinal}'>{prob*100:.1f}%</span>", unsafe_allow_html=True)
     st.progress(prob)
-    st.markdown(f"<p style='color:{cor_sinal}; font-weight:bold;'>SINAL: {texto_sinal}</p>", unsafe_allow_html=True)
 
-    # --- PAINEL DE ORDENS ---
-    st.sidebar.header("💰 Gestão")
-    st.sidebar.metric("Saldo", f"${st.session_state.saldo:.2f}")
+    # GESTÃO FINANCEIRA (SALDO REAL DO BANCO DE DADOS)
+    saldo_atual = get_saldo()
+    st.sidebar.metric("Saldo Permanente", f"${saldo_atual:.2f}")
     
-    st.markdown("### Painel de Ordens")
-    qtd = st.number_input("Contratos:", min_value=1, value=100, step=50)
-    col_b1, col_b2 = st.columns(2)
-    
-    with col_b1:
-        if st.button("🟢 COMPRAR", use_container_width=True):
-            st.session_state.saldo -= preco_atual * qtd
-            st.session_state.posicao += qtd
-            st.session_state.preco_entrada = preco_atual
+    # OPERAÇÕES
+    qtd = st.number_input("Contratos:", 1, 1000, 100)
+    if st.button("🟢 COMPRAR", use_container_width=True):
+        st.session_state.p_entrada = preco_atual
+        st.session_state.p_qtd = qtd
+        st.success("Ordem Executada!")
+
+    if st.button("🔴 FECHAR POSIÇÃO", use_container_width=True):
+        if 'p_entrada' in st.session_state:
+            lucro = (preco_atual - st.session_state.p_entrada) * st.session_state.p_qtd
+            update_saldo(saldo_atual + lucro)
+            save_trade("LONG", st.session_state.p_entrada, preco_atual, lucro)
+            del st.session_state.p_entrada
             st.rerun()
-    with col_b2:
-        if st.button("🔴 FECHAR", use_container_width=True):
-            if st.session_state.posicao > 0:
-                lucro = (preco_atual - st.session_state.preco_entrada) * st.session_state.posicao
-                st.session_state.saldo += preco_atual * st.session_state.posicao
-                st.session_state.log_trades.append({"Data": datetime.now().strftime("%H:%M"), "Resultado": round(lucro, 2)})
-                st.session_state.historico_patrimonio.append(st.session_state.saldo)
-                st.session_state.posicao = 0
-                st.rerun()
 
     # ABAS
-    t1, t2, t3 = st.tabs(["📊 Gráfico", "📁 Log", "📈 Performance"])
+    t1, t2, t3 = st.tabs(["📊 Gráfico Avançado", "📁 Histórico Salvo", "📉 Performance"])
+    
     with t1:
-        fig = go.Figure(go.Scatter(y=dados['Algodao'].tail(30), fill='tozeroy', line=dict(color=cor_sinal)))
-        fig.update_layout(height=280, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=dados['Algodao'].tail(50), name="Preço", line=dict(color=cor_sinal, width=3)))
+        fig.add_trace(go.Scatter(y=dados['MA20'].tail(50), name="Média 20", line=dict(color='rgba(255,255,255,0.4)', dash='dot')))
+        fig.update_layout(height=350, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
+
     with t2:
-        if st.session_state.log_trades: st.table(pd.DataFrame(st.session_state.log_trades))
-    with t3:
-        fig_eq = go.Figure(go.Scatter(y=st.session_state.historico_patrimonio, mode='lines+markers', line=dict(color='#deff9a')))
-        fig_eq.update_layout(height=250, template="plotly_dark")
-        st.plotly_chart(fig_eq, use_container_width=True)
+        conn = sqlite3.connect('cotton_intel.db')
+        df_trades = pd.read_sql_query("SELECT * FROM trades ORDER BY id DESC", conn)
+        st.dataframe(df_trades, use_container_width=True)
+        conn.close()
 
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Erro no Sistema: {e}")
+
