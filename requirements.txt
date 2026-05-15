@@ -6,6 +6,8 @@ scikit-learn
 streamlit-autorefresh
 pytz
 feedparser
+deep-translator
+
 
 
 
