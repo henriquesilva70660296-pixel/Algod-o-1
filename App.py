@@ -17,12 +17,16 @@ st.set_page_config(page_title="Cotton Intel Pro MASTER", layout="wide")
 def init_db():
     conn = sqlite3.connect('cotton_intel.db')
     c = conn.cursor()
+    # Criação das tabelas base[span_1](start_span)[span_1](end_span)
     c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
     c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL)')
+    
+    # Garantia de que a coluna confianca existe[span_2](start_span)[span_2](end_span)
     try:
         c.execute('ALTER TABLE trades ADD COLUMN confianca REAL DEFAULT 0.5')
     except:
         pass 
+        
     c.execute('SELECT saldo FROM conta WHERE id = 1')
     if not c.fetchone():
         c.execute('INSERT INTO conta (id, saldo) VALUES (1, 100000.0)')
@@ -36,14 +40,15 @@ def analisar_sentimento_noticias():
     try:
         feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
         score = 0
-        p_alta = ['rise', 'high', 'shortage', 'bullish', 'increase', 'drought', 'demand']
-        p_baixa = ['fall', 'low', 'surplus', 'bearish', 'decrease', 'oversupply', 'drop']
+        p_alta = ['rise', 'high', 'shortage', 'bullish', 'increase', 'drought', 'demand', 'low stocks']
+        p_baixa = ['fall', 'low', 'surplus', 'bearish', 'decrease', 'oversupply', 'drop', 'weak demand']
         for n in feed.entries[:10]:
             t = n.title.lower()
             if any(w in t for w in p_alta): score += 1
             if any(w in t for w in p_baixa): score -= 1
         return 1 if score > 0 else -1 if score < 0 else 0
-    except: return 0
+    except:
+        return 0
 
 @st.cache_data(ttl=40)
 def carregar_dados_mestre():
@@ -51,7 +56,7 @@ def carregar_dados_mestre():
     dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
     df = pd.DataFrame(dfs).ffill().dropna()
     
-    # Indicadores Técnicos[span_2](start_span)[span_2](end_span)
+    # Indicadores Técnicos[span_3](start_span)[span_3](end_span)
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
     delta = df['Algodao'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -70,17 +75,25 @@ def carregar_dados_mestre():
     
     return modelo, df, df_norm, features
 
+def get_market_status():
+    tz = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.now(tz)
+    abertura, fechamento = agora.replace(hour=10, minute=0, second=0), agora.replace(hour=17, minute=0, second=0)
+    if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
+    return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
+
 # --- 2. ESTILO CSS ---
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #0d1117; }
-    .stMetric { background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; margin-bottom: 10px; }
-    .ia-container { padding: 20px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.2); }
-    .side-monitor { background-color: #1c2128; padding: 15px; border-radius: 10px; border: 1px solid #30363d; height: 100%; }
+    .stMetric { background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; }
+    .status-card { padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 15px; color: white; font-weight: bold; }
+    .ia-container { padding: 25px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 15px; background: linear-gradient(145deg, #0d1117, #161b22); }
+    .news-card { background-color: #161b22; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #58a6ff; font-size: 0.85rem; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. LÓGICA DE INTERFACE ---
+# --- 3. LÓGICA PRINCIPAL ---
 try:
     modelo, df, df_norm, features = carregar_dados_mestre()
     prob = modelo.predict_proba(df[features].tail(1))[0][1]
@@ -88,77 +101,87 @@ try:
     
     conn = sqlite3.connect('cotton_intel.db')
     saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
+    historico = pd.read_sql_query("SELECT * FROM trades ORDER BY id DESC", conn)
     conn.close()
 
-    # Barra Lateral Esquerda (Gestão)
     with st.sidebar:
-        st.header("🛡️ Gestão")
+        st.header("💳 Financial Hub")
         st.metric("Saldo Líquido", f"${saldo_atual:,.2f}")
+        
+        if not historico.empty:
+            win_rate = (len(historico[historico['lucro'] > 0]) / len(historico)) * 100
+            st.metric("Taxa de Acerto IA", f"{win_rate:.1f}%")
+        
+        with st.expander("🛠️ Dados Técnicos"):
+            st.write(f"RSI (14): **{df['RSI'].iloc[-1]:.2f}**")
+            st.write(f"Volatilidade: **{df['Volatilidade'].iloc[-1]:.4f}**")
         st.markdown("---")
-        if 'ent' in st.session_state:
-            st.warning("Posição em Aberto")
-            if st.button("FECHAR POSIÇÃO"):
-                # Lógica de fechamento simplificada para o exemplo
+        st.caption("Cotton Intel MASTER v3.1")
+
+    st_lab, t_lab, color = get_market_status()
+    st.markdown(f'<div class="status-card" style="background-color: {color};">{st_lab} | {t_lab}</div>', unsafe_allow_html=True)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("COT. ALGODÃO", f"${preco_atual:.4f}")
+    m2.metric("PETRÓLEO", f"${df['Petroleo'].iloc[-1]:.2f}")
+    m3.metric("DÓLAR (DXY)", f"{df['Dolar'].iloc[-1]:.2f}")
+
+    st.markdown("---")
+
+    c_ia, c_op = st.columns([1.5, 1])
+
+    with c_ia:
+        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.75 else ("#ff4b4b", "VENDA FORTE") if prob < 0.25 else ("#fccf03", "AGUARDAR")
+        st.markdown(f'<div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};"><small style="color:#8b949e">CONFIANÇA DO MODELO</small><br><span style="font-size: 55px; font-weight: 900;">{prob*100:.1f}%</span><br><b style="font-size: 22px;">{txt_ia}</b></div>', unsafe_allow_html=True)
+
+    with c_op:
+        st.markdown('<div style="background-color:#161b22; padding:20px; border-radius:15px; border:1px solid #30363d">', unsafe_allow_html=True)
+        if 'ent' not in st.session_state:
+            qtd = st.number_input("Contratos", 1, 1000, 10)
+            if st.button("🚀 ABRIR COMPRA", use_container_width=True):
+                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "LONG"
+                st.rerun()
+            if st.button("📉 ABRIR VENDA", use_container_width=True):
+                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "SHORT"
+                st.rerun()
+        else:
+            m = 1 if st.session_state.tipo == "LONG" else -1
+            lucro = (preco_atual - st.session_state.ent) * st.session_state.q * m
+            st.metric(f"Posição {st.session_state.tipo}", f"${lucro:,.2f}", delta=f"{((preco_atual/st.session_state.ent)-1)*100*m:.3f}%")
+            if st.button("✅ FECHAR OPERAÇÃO", use_container_width=True):
+                c = sqlite3.connect('cotton_intel.db')
+                c.execute('UPDATE conta SET saldo = saldo + ?', (lucro,))
+                c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca) VALUES (?,?,?,?,?,?)',
+                         (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro, prob))
+                c.commit(); c.close()
                 del st.session_state.ent
                 st.rerun()
-
-    # LAYOUT PRINCIPAL: 3 Colunas[span_3](start_span)[span_3](end_span)
-    # col_main: IA e Gráfico | col_side: Monitor Dólar/Petróleo
-    col_main, col_side = st.columns([3, 1])
-
-    with col_main:
-        # Área da IA
-        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.75 else ("#ff4b4b", "VENDA FORTE") if prob < 0.25 else ("#fccf03", "AGUARDAR")
-        st.markdown(f'<div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};"><small style="color:white">PROBABILIDADE IA</small><br><span style="font-size: 40px; font-weight: 900;">{prob*100:.1f}%</span> - <b>{txt_ia}</b></div>', unsafe_allow_html=True)
-        
-        # Gráfico de Área (O que você tinha antes)[span_4](start_span)[span_4](end_span)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            y=df['Algodao'].tail(60), 
-            fill='tozeroy', 
-            line=dict(color=cor_ia, width=3),
-            name="Preço Algodão"
-        ))
-        fig.update_layout(
-            template="plotly_dark", 
-            height=450, 
-            margin=dict(l=0,r=0,t=0,b=0),
-            yaxis=dict(gridcolor='#30363d'),
-            xaxis=dict(gridcolor='#30363d')
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_side:
-        # Aba Lateral Direita (Monitor Macro)[span_5](start_span)[span_5](end_span)
-        st.markdown('<div class="side-monitor">', unsafe_allow_html=True)
-        st.subheader("🌐 Monitor Macro")
-        
-        # Métricas de Petróleo e Dólar separadas à direita[span_6](start_span)[span_6](end_span)
-        petroleo_val = df['Petroleo'].iloc[-1]
-        dolar_val = df['Dolar'].iloc[-1]
-        
-        st.metric("PETRÓLEO (WTI)", f"${petroleo_val:.2f}", 
-                  delta=f"{((petroleo_val/df['Petroleo'].iloc[-2])-1)*100:.2f}%")
-        
-        st.metric("DÓLAR (DXY)", f"{dolar_val:.2f}", 
-                  delta=f"{((dolar_val/df['Dolar'].iloc[-2])-1)*100:.2f}%", delta_color="inverse")
-        
-        st.markdown("---")
-        st.write("**Sentimento:**")
-        sent = analisar_sentimento_noticias()
-        st.info("📈 Otimista" if sent == 1 else "📉 Pessimista" if sent == -1 else "⚖️ Neutro")
-        
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Abas Inferiores
-    t1, t2 = st.tabs(["📜 Histórico", "📰 Notícias"])
+    t1, t2, t3 = st.tabs(["📈 Gráfico Master", "📜 Histórico de Performance", "📰 Notícias Traduzidas"])
+
     with t1:
-        conn = sqlite3.connect('cotton_intel.db')
-        hist = pd.read_sql_query("SELECT * FROM trades ORDER BY id DESC LIMIT 5", conn)
-        conn.close()
-        st.table(hist)
+        # Gráfico Restaurado[span_4](start_span)[span_4](end_span)
+        fig = go.Figure(data=[go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy')])
+        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=0,b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
     with t2:
-        st.caption("Notícias mundiais traduzidas em tempo real...")
+        if not historico.empty:
+            display_df = historico[['data', 'tipo', 'lucro', 'confianca']].copy()
+            st.dataframe(display_df.head(15), use_container_width=True)
+        else:
+            st.info("Aguardando primeiro trade.")
+
+    with t3:
+        try:
+            translator = GoogleTranslator(source='en', target='pt')
+            feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
+            for n in feed.entries[:6]:
+                st.markdown(f'<div class="news-card"><b>{translator.translate(n.title)}</b><br><small>{n.published}</small></div>', unsafe_allow_html=True)
+        except:
+            st.write("Erro ao carregar notícias.")
 
 except Exception as e:
-    st.error(f"Erro ao carregar layout: {e}")
+    st.error(f"Erro: {e}")
+
