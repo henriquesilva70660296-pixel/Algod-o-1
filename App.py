@@ -183,10 +183,41 @@ try:
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
     with tab_c:
+        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL (MANTIDO INTACTO) ---
         fig_c = go.Figure()
         for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
-        fig_c.update_layout(template="plotly_dark", height=350, title="Correlação Normalizada")
+        fig_c.update_layout(template="plotly_dark", height=350, title="Correlação Normalizada Histórica (2 Anos)")
         st.plotly_chart(fig_c, use_container_width=True)
+
+        # --- [ADICIONADO] NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
+        st.markdown("---")
+        st.subheader("🔗 Correlação Normalizada em Tempo Real (Hoje, 1 Minuto)")
+        try:
+            # Baixa os dados rápidos do dia para os 3 ativos
+            tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
+            dfs_fast = {nome: yf.download(tickers=t, period="1d", interval="1m")['Close'] for nome, t in tickers_fast.items()}
+            df_fast = pd.DataFrame(dfs_fast).ffill().dropna()
+
+            if not df_fast.empty:
+                # Faz a normalização matemática baseada no primeiro minuto do dia de hoje (Início em 100%)
+                df_fast_norm = (df_fast / df_fast.iloc[0]) * 100
+                
+                fig_c_fast = go.Figure()
+                colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
+                
+                for col in df_fast_norm.columns:
+                    fig_c_fast.add_trace(go.Scatter(
+                        x=df_fast_norm.index,
+                        y=df_fast_norm[col],
+                        name=f"{col} (1m)",
+                        line=dict(color=colors_fast.get(col, None), width=2)
+                    ))
+                fig_c_fast.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
+                st.plotly_chart(fig_c_fast, use_container_width=True)
+            else:
+                st.caption("Aguardando abertura dos mercados para cruzar as correlações diárias...")
+        except Exception as e:
+            st.caption("Sincronizando fluxo macro de alta frequência...")
 
     with tab_n:
         feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
