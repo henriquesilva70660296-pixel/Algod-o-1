@@ -61,7 +61,7 @@ def get_market_status():
     if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
     return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
 
-# --- 2. ESTILO CSS (Visual da Versão Anterior) ---
+# --- 2. ESTILO CSS ---
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #161b22; }
@@ -96,27 +96,24 @@ try:
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
 
-        # --- CONVERSÃO MATEMÁTICA RÍGIDA DE 0 A 100 CONTRA O HISTÓRICO ---
-        # 1. RSI já está na escala 0-100
+        # --- CALIBRAÇÃO DA ESCALA 0 A 100 ---
         score_rsi = max(0.0, min(100.0, rsi_val))
         
-        # 2. Média Móvel (Preço vs Média): Se o preço subir acima da média, pontua rumo a 100. Se cair abaixo, rumo a 0.
+        # Ajuste Fino MA20: Ampliado o peso para flutuações curtas de preço de commodities
         desvio_media = ((preco_atual / ma20_val) - 1) * 100
-        score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 15))) 
+        score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 120))) 
 
-        # 3. Volatilidade Real normalizada de 0 a 100 com base no histórico recente do seu dataframe
         v_min = df['Volatilidade'].tail(60).min()
         v_max = df['Volatilidade'].tail(60).max()
         score_volat = ((volat_val - v_min) / ((v_max - v_min) + 1e-9)) * 100
         score_volat = max(0.0, min(100.0, score_volat))
 
-        # Função simples para mudar as cores das barras baseado em zonas de força técnica
         def obter_cor_tecnica(score):
-            if score > 65: return '#00CF85' # Verde (Força de Alta)
-            if score < 35: return '#ff4b4b' # Vermelho (Força de Baixa)
-            return '#fccf03' # Amarelo (Neutro / Transição)
+            if score > 60: return '#00CF85'   # Verde (Comprador)
+            if score < 40: return '#ff4b4b'   # Vermelho (Vendedor)
+            return '#fccf03'                  # Amarelo (Neutro)
 
-        # --- SEU NOVO GRÁFICO TÉCNICO EXCLUSIVO (APENAS OS 3 DADOS TÉCNICOS PURISSIMOS) ---
+        # Gráfico de barras verticais corrigido
         fig_barras = go.Figure(go.Bar(
             x=['RSI', 'Média MA20', 'Volatilidade'],
             y=[score_rsi, score_ma20, score_volat],
@@ -128,11 +125,10 @@ try:
             template="plotly_dark",
             height=200,
             margin=dict(l=10, r=10, t=10, b=10),
-            yaxis=dict(range=[0, 100], gridcolor="#30363d"), # Fixa o teto de 100% rigidamente
+            yaxis=dict(range=[0, 100], gridcolor="#30363d"),
             showlegend=False
         )
         st.plotly_chart(fig_barras, use_container_width=True, config={'displayModeBar': False})
-        # ----------------------------------------------------------------------
         
         st.subheader("📝 Valores Reais Brutos")
         st.write(f"RSI (14): **{rsi_val:.2f}**")
@@ -155,7 +151,7 @@ try:
 
     st.markdown("---")
 
-    # Área Central: IA e Boleta de Trade (Mantidas na área principal da tela)
+    # Área Central: IA e Boleta de Trade
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
@@ -196,7 +192,6 @@ try:
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
-        # --- NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
         st.subheader("⏱️ Gráfico do Algodão em Tempo Real (1 Minuto)")
         try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
@@ -215,11 +210,17 @@ try:
         except:
             st.caption("Conectando ao fluxo de dados rápidos...")
 
-        # --- SEU GRÁFICO ORIGINAL ---
         st.markdown("---")
-        st.subheader("🗓️ Histórico de Médio Prazo (60 Períodos)")
-        fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
-        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
+        st.subheader("🗓️ Histórico de Médio Prazo com Média Móvel (60 Períodos)")
+        
+        dados_preco = df['Algodao'].tail(60)
+        dados_ma20 = df['MA20'].tail(60)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=dados_preco.index, y=dados_preco, line=dict(color=cor_ia, width=3), fill='tozeroy', name='Preço Algodão'))
+        fig.add_trace(go.Scatter(x=dados_ma20.index, y=dados_ma20, line=dict(color='#ff9f43', width=2, dash='dash'), name='Média MA20'))
+        
+        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=1.1, x=0))
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_f:
@@ -228,7 +229,6 @@ try:
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
     with tab_c:
-        # --- NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
         st.subheader("🔗 Correlação Normalizada em Tempo Real (Hoje, 1 Minuto)")
         try:
             tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
@@ -237,17 +237,10 @@ try:
 
             if not df_fast.empty:
                 df_fast_norm = (df_fast / df_fast.iloc[0]) * 100
-                
                 fig_c_fast = go.Figure()
                 colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
-                
                 for col in df_fast_norm.columns:
-                    fig_c_fast.add_trace(go.Scatter(
-                        x=df_fast_norm.index,
-                        y=df_fast_norm[col],
-                        name=f"{col} (1m)",
-                        line=dict(color=colors_fast.get(col, None), width=2)
-                    ))
+                    fig_c_fast.add_trace(go.Scatter(x=df_fast_norm.index, y=df_fast_norm[col], name=f"{col} (1m)", line=dict(color=colors_fast.get(col, None), width=2)))
                 fig_c_fast.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig_c_fast, use_container_width=True)
             else:
@@ -255,7 +248,6 @@ try:
         except Exception as e:
             st.caption("Sincronizando fluxo macro de alta frequência...")
 
-        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL ---
         st.markdown("---")
         fig_c = go.Figure()
         for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
