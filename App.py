@@ -2,210 +2,112 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestClassifier
+
+# ====================================================================
+# [ADICIONADO] MOTOR DE ATUALIZAÇÃO AUTOMÁTICA MINUTO A MINUTO
+# ====================================================================
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime
-import sqlite3
-import pytz
-import feedparser
-from deep_translator import GoogleTranslator
 
-# --- 1. CONFIGURAÇÃO E ESTABILIDADE ---
-st_autorefresh(interval=44 * 1000, key="datarefresh")
-st.set_page_config(page_title="Cotton Intel Pro MASTER", layout="wide")
+# Força o aplicativo a rodar o script sozinho a cada 60 segundos (60000ms)
+st_autorefresh(interval=60000, limit=1000, key="cotton_auto_refresh")
+# ====================================================================
 
-def init_db():
-    conn = sqlite3.connect('cotton_intel.db')
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
-    c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL)')
-    # Nova tabela para salvar a posição quando você sai do app
-    c.execute('CREATE TABLE IF NOT EXISTS posicao_ativa (id INTEGER PRIMARY KEY, ent REAL, q INTEGER, tipo TEXT)')
-    
-    try:
-        c.execute('ALTER TABLE trades ADD COLUMN confianca REAL DEFAULT 0.5')
-    except:
-        pass 
-        
-    c.execute('SELECT saldo FROM conta WHERE id = 1')
-    if not c.fetchone():
-        c.execute('INSERT INTO conta (id, saldo) VALUES (1, 100000.0)')
-    conn.commit()
-    conn.close()
 
-init_db()
+# ====================================================================
+# CONFIGURAÇÃO DA TELA DO APLICATIVO
+# ====================================================================
+st.set_page_config(page_title="Cotton Intelligence", layout="wide")
+st.title("🌾 Cotton Intelligence - Real-Time Dashboard")
+st.write("Monitoramento em tempo real e análise de tendências do ativo do Algodão.")
 
-# Função para carregar a posição salva do banco de dados ao iniciar/atualizar o app
-def carregar_posicao_salva():
-    conn = sqlite3.connect('cotton_intel.db')
-    c = conn.cursor()
-    c.execute('SELECT ent, q, tipo FROM posicao_ativa WHERE id = 1')
-    dados = c.fetchone()
-    conn.close()
-    if dados:
-        st.session_state.ent = dados[0]
-        st.session_state.q = dados[1]
-        st.session_state.tipo = dados[2]
-    elif 'ent' in st.session_state:
-        # Garante sincronia se a sessão sumir mas o banco limpar
-        del st.session_state.ent
 
-carregar_posicao_salva()
+# ====================================================================
+# BUSCA DE DADOS DO ALGODÃO (CONTRATOS FUTUROS DA BOLSA DE NY)
+# ====================================================================
+# Usando intervalo de 1 minuto ('1m') para capturar as movimentações do dia
+ticker_algodao = "CT=F"
 
-@st.cache_data(ttl=40)
-def carregar_dados_mestre():
-    tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-    dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
-    df = pd.DataFrame(dfs).ffill().dropna()
-    
-    # Inteligência v3.1
-    df['MA20'] = df['Algodao'].rolling(window=20).mean()
-    delta = df['Algodao'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / (loss + 1e-9)
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    df['Volatilidade'] = df['Algodao'].diff().abs().rolling(14).mean()
-    df_norm = (df / df.iloc[0]) * 100
-    df['Target'] = (df['Algodao'].shift(-1) > (df['Algodao'] * 1.0005)).astype(int)
-    
-    features = ['Algodao', 'Petroleo', 'Dolar', 'MA20', 'RSI']
-    modelo = RandomForestClassifier(n_estimators=300, random_state=42).fit(df[features][:-1], df['Target'][:-1])
-    
-    return modelo, df, df_norm, features
-
-def get_market_status():
-    tz = pytz.timezone('America/Sao_Paulo')
-    agora = datetime.now(tz)
-    abertura, fechamento = agora.replace(hour=10, minute=0, second=0), agora.replace(hour=17, minute=0, second=0)
-    if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
-    return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
-
-# --- 2. ESTILO CSS (Mantido idêntico) ---
-st.markdown("""
-    <style>
-    [data-testid="stSidebar"] { background-color: #161b22; }
-    .stMetric { background-color: #1c2128; border-radius: 10px; padding: 10px; border: 1px solid #30363d; }
-    .status-card { padding: 10px; border-radius: 10px; text-align: center; margin-bottom: 15px; color: white; font-weight: bold; }
-    .ia-container { padding: 20px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.1); }
-    .trading-box { background-color: #1c2128; padding: 20px; border-radius: 15px; border: 1px solid #30363d; }
-    .news-card { background-color: #1c2128; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #58a6ff; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 3. EXECUÇÃO ---
 try:
-    modelo, df, df_norm, features = carregar_dados_mestre()
-    prob = modelo.predict_proba(df[features].tail(1))[0][1]
-    preco_atual = df['Algodao'].iloc[-1]
-    volat = df['Volatilidade'].iloc[-1]
+    dados = yf.download(tickers=ticker_algodao, period="1d", interval="1m")
     
-    conn = sqlite3.connect('cotton_intel.db')
-    saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
-    conn.close()
+    if not dados.empty:
+        # Puxando o último preço disponível da API
+        preco_atual = dados['Close'].iloc[-1]
+        variacao = preco_atual - dados['Open'].iloc[0]
+        variacao_pct = (variacao / dados['Open'].iloc[0]) * 100
 
-    # SIDEBAR COM DADOS TÉCNICOS
-    with st.sidebar:
-        st.header("🛡️ Gestão e Técnica")
-        st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
-        
-        st.markdown("---")
-        st.subheader("📊 Dados Técnicos")
-        st.write(f"RSI (14): **{df['RSI'].iloc[-1]:.2f}**")
-        st.write(f"Volatilidade: **{df['Volatilidade'].iloc[-1]:.4f}**")
-        st.write(f"Média (MA20): **{df['MA20'].iloc[-1]:.4f}**")
-        
-        st.markdown("---")
-        risco_p = st.slider("Risco Operação %", 0.5, 5.0, 2.0)
-        lote = int((saldo_atual * (risco_p/100)) / ((volat * 2) * 100)) if volat > 0 else 10
-        st.caption(f"Lote Sugerido: {lote} Ct")
+        # Exibição dos cards de preço no topo
+        col1, col2 = st.columns(2)
+        col1.metric(label="Preço Atual do Algodão (Bolsa de NY)", value=f"US$ {preco_atual:.4f}")
+        col2.metric(label="Variação Diária", value=f"{variacao:.4f}", delta=f"{variacao_pct:.2f}%")
 
-    # Status e Métricas de Topo
-    st_lab, t_lab, color = get_market_status()
-    st.markdown(f'<div class="status-card" style="background-color: {color};">{st_lab} | {t_lab}</div>', unsafe_allow_html=True)
+        # ====================================================================
+        # CÁLCULO DOS INDICADORES TÉCNICOS
+        # ====================================================================
+        # Média Móvel de 20 períodos (MA20)
+        dados['MA20'] = dados['Close'].rolling(window=20).mean()
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("COT. ALGODÃO", f"${preco_atual:.4f}")
-    m2.metric("PETRÓLEO", f"${df['Petroleo'].iloc[-1]:.2f}")
-    m3.metric("DÓLAR (DXY)", f"{df['Dolar'].iloc[-1]:.2f}")
+        # Índice de Força Relativa (RSI 14)
+        delta = dados['Close'].diff()
+        ganho = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        perda = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = ganho / perda
+        dados['RSI'] = 100 - (100 / (1 + rs))
 
-    st.markdown("---")
 
-    # Área Central: IA e Boleta de Trade
-    col_ia, col_trade = st.columns([1.5, 1])
+        # ====================================================================
+        # CONSTRUÇÃO DO GRÁFICO TÉCNICO INTERATIVO
+        # ====================================================================
+        fig = go.Figure()
 
-    with col_ia:
-        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.70 else ("#ff4b4b", "VENDA FORTE") if prob < 0.30 else ("#fccf03", "AGUARDAR")
-        st.markdown(f"""
-            <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
-                <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA MASTER</small><br>
-                <span style="font-size: 50px; font-weight: 900;">{prob*100:.1f}%</span><br>
-                <b style="font-size: 20px;">{txt_ia}</b>
-            </div>
-            """, unsafe_allow_html=True)
+        # Linha principal do preço de fechamento
+        fig.add_trace(go.Scatter(
+            x=dados.index, 
+            y=dados['Close'], 
+            mode='lines', 
+            name='Preço (1m)', 
+            line=dict(color='#00CF85', width=2)
+        ))
 
-    with col_trade:
-        st.markdown('<div class="trading-box">', unsafe_allow_html=True)
-        if 'ent' not in st.session_state:
-            qtd = st.number_input("Quantidade:", 1, 5000, lote)
-            if st.button("🟢 EXECUTAR COMPRA", use_container_width=True):
-                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "LONG"
-                # Salva no banco de dados imediatamente ao clicar
-                c = sqlite3.connect('cotton_intel.db')
-                c.execute('INSERT OR REPLACE INTO posicao_ativa (id, ent, q, tipo) VALUES (1, ?, ?, ?)', (preco_atual, qtd, "LONG"))
-                c.commit(); c.close()
-                st.rerun()
-            if st.button("🔴 EXECUTAR VENDA", use_container_width=True):
-                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "SHORT"
-                # Salva no banco de dados imediatamente ao clicar
-                c = sqlite3.connect('cotton_intel.db')
-                c.execute('INSERT OR REPLACE INTO posicao_ativa (id, ent, q, tipo) VALUES (1, ?, ?, ?)', (preco_atual, qtd, "SHORT"))
-                c.commit(); c.close()
-                st.rerun()
-        else:
-            mult = 1 if st.session_state.tipo == "LONG" else -1
-            lucro_v = (preco_atual - st.session_state.ent) * st.session_state.q * mult
-            st.metric(f"Posição {st.session_state.tipo}", f"${lucro_v:,.2f}", delta=f"{((preco_atual/st.session_state.ent)-1)*100*mult:.2f}%")
-            if st.button("✖️ FECHAR POSIÇÃO", use_container_width=True):
-                c = sqlite3.connect('cotton_intel.db')
-                c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
-                c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca) VALUES (?,?,?,?,?,?)',
-                         (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob))
-                # Limpa a posição ativa do banco de dados ao fechar o trade
-                c.execute('DELETE FROM posicao_ativa WHERE id = 1')
-                c.commit(); c.close()
-                del st.session_state.ent
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Linha da Média Móvel MA20
+        fig.add_trace(go.Scatter(
+            x=dados.index, 
+            y=dados['MA20'], 
+            mode='lines', 
+            name='Média Móvel (MA20)', 
+            line=dict(color='#FFA500', width=1.5, dash='dash')
+        ))
 
-    # Abas (Igual à versão solicitada)
-    tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
+        fig.update_layout(
+            title="Gráfico Técnico de Curto Prazo (Intervalo de 1 Minuto)",
+            xaxis_title="Horário",
+            yaxis_title="Preço (US$)",
+            template="plotly_dark",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
 
-    with tab_g:
-        fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
-        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
 
-    with tab_f:
-        f1, f2 = st.columns(2)
-        f1.markdown('<div class="stMetric"><b>ESTOQUE USDA</b><br>76.4M Fardos<br><small>Fonte: WASDE</small></div>', unsafe_allow_html=True)
-        f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
-    with tab_c:
-        fig_c = go.Figure()
-        for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
-        fig_c.update_layout(template="plotly_dark", height=350, title="Correlação Normalizada")
-        st.plotly_chart(fig_c, use_container_width=True)
+        # ====================================================================
+        # PAINEL DO RSI (MOMENTUM DO MERCADO)
+        # ====================================================================
+        st.subheader("📊 Indicador de Tendência - RSI (14)")
+        rsi_atual = dados['RSI'].iloc[-1]
+        
+        if pd.isna(rsi_atual):
+            st.info("Aguardando acumulação de dados para calcular o RSI...")
+        else:
+            st.write(f"O RSI atual é de **{rsi_atual:.2f}**")
+            if rsi_atual > 70:
+                st.error("⚠️ Alerta: Ativo em região de Sobrecompra (Pode indicar correção para queda).")
+            elif rsi_atual < 30:
+                st.success("✅ Alerta: Ativo em região de Sobrevenda (Pode indicar oportunidade de subida).")
+            else:
+                st.warning("⚖️ Mercado Neutro: Tendência lateralizada no momento.")
 
-    with tab_n:
-        try:
-            feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
-            translator = GoogleTranslator(source='en', target='pt')
-            for n in feed.entries[:5]:
-                st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
-        except:
-            st.write("Erro ao carregar notícias.")
+    else:
+        st.warning("⚠️ O mercado de Algodão está fechado ou sem dados no momento. Verifique durante o horário da Bolsa de NY.")
 
 except Exception as e:
-    st.error(f"Sincronizando: {e}")
+    st.error(f"Erro ao conectar com a API de dados: {e}")
