@@ -18,11 +18,19 @@ def init_db():
     conn = sqlite3.connect('cotton_intel.db')
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
-    c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL)')
+    c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL, stop_loss REAL, take_profit REAL)')
+    
+    # Garante que as colunas novas existam caso o banco já tenha sido criado no passado
     try:
         c.execute('ALTER TABLE trades ADD COLUMN confianca REAL DEFAULT 0.5')
-    except:
-        pass 
+    except: pass
+    try:
+        c.execute('ALTER TABLE trades ADD COLUMN stop_loss REAL DEFAULT 0.0')
+    except: pass
+    try:
+        c.execute('ALTER TABLE trades ADD COLUMN take_profit REAL DEFAULT 0.0')
+    except: pass
+    
     c.execute('SELECT saldo FROM conta WHERE id = 1')
     if not c.fetchone():
         c.execute('INSERT INTO conta (id, saldo) VALUES (1, 100000.0)')
@@ -84,7 +92,7 @@ try:
     saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
     conn.close()
 
-    # SIDEBAR COM DADOS TÉCNICOS
+    # SIDEBAR COM DADOS TÉCNICOS (Gráfico 0-100 Calibrado)
     with st.sidebar:
         st.header("🛡️ Gestão e Técnica")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
@@ -96,10 +104,9 @@ try:
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
 
-        # --- CALIBRAÇÃO DA ESCALA 0 A 100 ---
+        # Conversão Matemática Escala 0 a 100
         score_rsi = max(0.0, min(100.0, rsi_val))
         
-        # Ajuste Fino MA20: Ampliado o peso para flutuações curtas de preço de commodities
         desvio_media = ((preco_atual / ma20_val) - 1) * 100
         score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 120))) 
 
@@ -109,11 +116,11 @@ try:
         score_volat = max(0.0, min(100.0, score_volat))
 
         def obter_cor_tecnica(score):
-            if score > 60: return '#00CF85'   # Verde (Comprador)
-            if score < 40: return '#ff4b4b'   # Vermelho (Vendedor)
-            return '#fccf03'                  # Amarelo (Neutro)
+            if score > 60: return '#00CF85'
+            if score < 40: return '#ff4b4b'
+            return '#fccf03'
 
-        # Gráfico de barras verticais corrigido
+        # Desenho das Barras Verticais Técnicas Puras
         fig_barras = go.Figure(go.Bar(
             x=['RSI', 'Média MA20', 'Volatilidade'],
             y=[score_rsi, score_ma20, score_volat],
@@ -151,7 +158,7 @@ try:
 
     st.markdown("---")
 
-    # Área Central: IA e Boleta de Trade
+    # Área Central: Painel da IA e Boleta com Stop Automático
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
@@ -166,29 +173,81 @@ try:
 
     with col_trade:
         st.markdown('<div class="trading-box">', unsafe_allow_html=True)
+        
+        # Estado 1: Sem ordens abertas -> Mostra inputs de alvo
         if 'ent' not in st.session_state:
             qtd = st.number_input("Quantidade:", 1, 5000, lote)
+            tp_input = st.number_input("Take Profit (Alvo Ganho $):", 0.10, 10.00, 1.00, step=0.10)
+            sl_input = st.number_input("Stop Loss (Limite Perda $):", 0.10, 5.00, 0.50, step=0.10)
+            
             if st.button("🟢 EXECUTAR COMPRA", use_container_width=True):
-                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "LONG"
+                st.session_state.ent = preco_atual
+                st.session_state.q = qtd
+                st.session_state.tipo = "LONG"
+                st.session_state.tp = preco_atual + tp_input
+                st.session_state.sl = preco_atual - sl_input
                 st.rerun()
+                
             if st.button("🔴 EXECUTAR VENDA", use_container_width=True):
-                st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "SHORT"
+                st.session_state.ent = preco_atual
+                st.session_state.q = qtd
+                st.session_state.tipo = "SHORT"
+                st.session_state.tp = preco_atual - tp_input
+                st.session_state.sl = preco_atual + sl_input
                 st.rerun()
+                
+        # Estado 2: Ordem Aberta -> Sistema monitora as saídas a cada atualização
         else:
             mult = 1 if st.session_state.tipo == "LONG" else -1
             lucro_v = (preco_atual - st.session_state.ent) * st.session_state.q * mult
-            st.metric(f"Posição {st.session_state.tipo}", f"${lucro_v:,.2f}", delta=f"{((preco_atual/st.session_state.ent)-1)*100*mult:.2f}%")
-            if st.button("✖️ FECHAR POSIÇÃO", use_container_width=True):
+            
+            gatilho_fechamento = False
+            motivo_fechamento = ""
+            
+            if st.session_state.tipo == "LONG":
+                if preco_atual >= st.session_state.tp:
+                    gatilho_fechamento = True
+                    motivo_fechamento = "🎯 TAKE PROFIT ATINGIDO!"
+                elif preco_atual <= st.session_state.sl:
+                    gatilho_fechamento = True
+                    motivo_fechamento = "🛡️ STOP LOSS ACIONADO!"
+            elif st.session_state.tipo == "SHORT":
+                if preco_atual <= st.session_state.tp:
+                    gatilho_fechamento = True
+                    motivo_fechamento = "🎯 TAKE PROFIT ATINGIDO!"
+                elif preco_atual >= st.session_state.sl:
+                    gatilho_fechamento = True
+                    motivo_fechamento = "🛡️ STOP LOSS ACIONADO!"
+            
+            # Executa fechamento automático caso encoste nos alvos
+            if gatilho_fechamento:
                 c = sqlite3.connect('cotton_intel.db')
                 c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
-                c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca) VALUES (?,?,?,?,?,?)',
-                         (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob))
-                c.commit(); c.close()
+                c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
+                         (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
+                c.commit()
+                c.close()
+                st.toast(f"{motivo_fechamento} Lucro: ${lucro_v:,.2f}")
                 del st.session_state.ent
                 st.rerun()
+            
+            # Painel visual do Trade Ativo
+            st.metric(f"Posição {st.session_state.tipo}", f"${lucro_v:,.2f}", delta=f"{((preco_atual/st.session_state.ent)-1)*100*mult:.2f}%")
+            st.caption(f"Alvo Ganho (TP): **${st.session_state.tp:.2f}** | Limite Perda (SL): **${st.session_state.sl:.2f}**")
+            
+            if st.button("✖️ FECHAR POSIÇÃO MANUAL", use_container_width=True):
+                c = sqlite3.connect('cotton_intel.db')
+                c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
+                c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
+                         (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
+                c.commit()
+                c.close()
+                del st.session_state.ent
+                st.rerun()
+                
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Abas
+    # Abas Operacionais
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
