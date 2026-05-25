@@ -7,6 +7,7 @@ streamlit-autorefresh
 pytz
 feedparser
 deep-translator
+streamlit-autorefresh
 
 
 
