@@ -152,13 +152,7 @@ try:
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
-        # --- SEU GRÁFICO ORIGINAL (MANTIDO INTACTO) ---
-        fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
-        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # --- [ADICIONADO] NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
-        st.markdown("---")
+        # --- [MOVIDO PARA O TOPO] NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
         st.subheader("⏱️ Gráfico do Algodão em Tempo Real (1 Minuto)")
         try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
@@ -177,29 +171,27 @@ try:
         except:
             st.caption("Conectando ao fluxo de dados rápidos...")
 
+        # --- SEU GRÁFICO ORIGINAL (FICOU EM SEGUNDO LUGAR) ---
+        st.markdown("---")
+        st.subheader("🗓️ Histórico de Médio Prazo (60 Períodos)")
+        fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
+        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
     with tab_f:
         f1, f2 = st.columns(2)
         f1.markdown('<div class="stMetric"><b>ESTOQUE USDA</b><br>76.4M Fardos<br><small>Fonte: WASDE</small></div>', unsafe_allow_html=True)
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
     with tab_c:
-        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL (MANTIDO INTACTO) ---
-        fig_c = go.Figure()
-        for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
-        fig_c.update_layout(template="plotly_dark", height=350, title="Correlação Normalizada Histórica (2 Anos)")
-        st.plotly_chart(fig_c, use_container_width=True)
-
-        # --- [ADICIONADO] NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
-        st.markdown("---")
+        # --- [MOVIDO PARA O TOPO] NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
         st.subheader("🔗 Correlação Normalizada em Tempo Real (Hoje, 1 Minuto)")
         try:
-            # Baixa os dados rápidos do dia para os 3 ativos
             tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
             dfs_fast = {nome: yf.download(tickers=t, period="1d", interval="1m")['Close'] for nome, t in tickers_fast.items()}
             df_fast = pd.DataFrame(dfs_fast).ffill().dropna()
 
             if not df_fast.empty:
-                # Faz a normalização matemática baseada no primeiro minuto do dia de hoje (Início em 100%)
                 df_fast_norm = (df_fast / df_fast.iloc[0]) * 100
                 
                 fig_c_fast = go.Figure()
@@ -218,6 +210,13 @@ try:
                 st.caption("Aguardando abertura dos mercados para cruzar as correlações diárias...")
         except Exception as e:
             st.caption("Sincronizando fluxo macro de alta frequência...")
+
+        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL (FICOU EM SEGUNDO LUGAR) ---
+        st.markdown("---")
+        fig_c = go.Figure()
+        for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
+        fig_c.update_layout(template="plotly_dark", height=350, title="Correlação Normalizada Histórica (2 Anos)")
+        st.plotly_chart(fig_c, use_container_width=True)
 
     with tab_n:
         feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
