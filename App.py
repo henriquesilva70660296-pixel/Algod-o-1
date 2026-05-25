@@ -19,14 +19,10 @@ def init_db():
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
     c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL)')
-    # Nova tabela para salvar a posição quando você sai do app
-    c.execute('CREATE TABLE IF NOT EXISTS posicao_ativa (id INTEGER PRIMARY KEY, ent REAL, q INTEGER, tipo TEXT)')
-    
     try:
         c.execute('ALTER TABLE trades ADD COLUMN confianca REAL DEFAULT 0.5')
     except:
         pass 
-        
     c.execute('SELECT saldo FROM conta WHERE id = 1')
     if not c.fetchone():
         c.execute('INSERT INTO conta (id, saldo) VALUES (1, 100000.0)')
@@ -34,23 +30,6 @@ def init_db():
     conn.close()
 
 init_db()
-
-# Função para carregar a posição salva do banco de dados ao iniciar/atualizar o app
-def carregar_posicao_salva():
-    conn = sqlite3.connect('cotton_intel.db')
-    c = conn.cursor()
-    c.execute('SELECT ent, q, tipo FROM posicao_ativa WHERE id = 1')
-    dados = c.fetchone()
-    conn.close()
-    if dados:
-        st.session_state.ent = dados[0]
-        st.session_state.q = dados[1]
-        st.session_state.tipo = dados[2]
-    elif 'ent' in st.session_state:
-        # Garante sincronia se a sessão sumir mas o banco limpar
-        del st.session_state.ent
-
-carregar_posicao_salva()
 
 @st.cache_data(ttl=40)
 def carregar_dados_mestre():
@@ -82,7 +61,7 @@ def get_market_status():
     if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
     return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
 
-# --- 2. ESTILO CSS (Mantido idêntico) ---
+# --- 2. ESTILO CSS (Visual da Versão Anterior) ---
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #161b22; }
@@ -151,17 +130,9 @@ try:
             qtd = st.number_input("Quantidade:", 1, 5000, lote)
             if st.button("🟢 EXECUTAR COMPRA", use_container_width=True):
                 st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "LONG"
-                # Salva no banco de dados imediatamente ao clicar
-                c = sqlite3.connect('cotton_intel.db')
-                c.execute('INSERT OR REPLACE INTO posicao_ativa (id, ent, q, tipo) VALUES (1, ?, ?, ?)', (preco_atual, qtd, "LONG"))
-                c.commit(); c.close()
                 st.rerun()
             if st.button("🔴 EXECUTAR VENDA", use_container_width=True):
                 st.session_state.ent, st.session_state.q, st.session_state.tipo = preco_atual, qtd, "SHORT"
-                # Salva no banco de dados imediatamente ao clicar
-                c = sqlite3.connect('cotton_intel.db')
-                c.execute('INSERT OR REPLACE INTO posicao_ativa (id, ent, q, tipo) VALUES (1, ?, ?, ?)', (preco_atual, qtd, "SHORT"))
-                c.commit(); c.close()
                 st.rerun()
         else:
             mult = 1 if st.session_state.tipo == "LONG" else -1
@@ -172,8 +143,6 @@ try:
                 c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
                 c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca) VALUES (?,?,?,?,?,?)',
                          (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob))
-                # Limpa a posição ativa do banco de dados ao fechar o trade
-                c.execute('DELETE FROM posicao_ativa WHERE id = 1')
                 c.commit(); c.close()
                 del st.session_state.ent
                 st.rerun()
@@ -183,9 +152,30 @@ try:
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
+        # --- SEU GRÁFICO ORIGINAL (MANTIDO INTACTO) ---
         fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
         fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
+        
+        # --- [ADICIONADO] NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
+        st.markdown("---")
+        st.subheader("⏱️ Gráfico do Algodão em Tempo Real (1 Minuto)")
+        try:
+            dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
+            if not dados_vapt.empty:
+                fig_minuto = go.Figure(go.Scatter(
+                    x=dados_vapt.index, 
+                    y=dados_vapt['Close'], 
+                    mode='lines+markers', 
+                    line=dict(color='#00CF85', width=2),
+                    name='Preço Rápido'
+                ))
+                fig_minuto.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0))
+                st.plotly_chart(fig_minuto, use_container_width=True)
+            else:
+                st.caption("Aguardando novas oscilações do mercado minuto a minuto...")
+        except:
+            st.caption("Conectando ao fluxo de dados rápidos...")
 
     with tab_f:
         f1, f2 = st.columns(2)
@@ -199,13 +189,13 @@ try:
         st.plotly_chart(fig_c, use_container_width=True)
 
     with tab_n:
-        try:
-            feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
-            translator = GoogleTranslator(source='en', target='pt')
-            for n in feed.entries[:5]:
+        feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
+        translator = GoogleTranslator(source='en', target='pt')
+        for n in feed.entries[:5]:
+            try:
                 st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
-        except:
-            st.write("Erro ao carregar notícias.")
+            except:
+                st.write(n.title)
 
 except Exception as e:
     st.error(f"Sincronizando: {e}")
