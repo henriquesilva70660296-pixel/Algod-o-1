@@ -90,35 +90,37 @@ try:
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
         
         st.markdown("---")
-        st.subheader("📊 Força dos Indicadores (0-100)")
+        st.subheader("📊 Dados Técnicos (0-100)")
         
         rsi_val = df['RSI'].iloc[-1]
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
 
-        # --- LÓGICA DE ESCALA 0 A 100 PARA AS BARRAS ---
-        # Barra 1: RSI (já é de 0 a 100)
-        score_rsi = rsi_val
+        # --- CONVERSÃO MATEMÁTICA RÍGIDA DE 0 A 100 CONTRA O HISTÓRICO ---
+        # 1. RSI já está na escala 0-100
+        score_rsi = max(0.0, min(100.0, rsi_val))
         
-        # Barra 2: Média Móvel convertida para Direção (Preço vs Média)
-        # Se preço acima da média = Força de alta (>50). Se abaixo = Força de queda (<50).
-        desvio_media = ((preco_atual / ma20_val) - 1) * 100  # Variação %
-        score_ma20 = max(0, min(100, 50 + (desvio_media * 10))) # Centraliza no 50 e dá peso ao desvio
+        # 2. Média Móvel (Preço vs Média): Se o preço subir acima da média, pontua rumo a 100. Se cair abaixo, rumo a 0.
+        desvio_media = ((preco_atual / ma20_val) - 1) * 100
+        score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 15))) 
 
-        # Barra 3: Direção Dinâmica Combinada da Tendência do Dia
-        score_volat = prob * 100 
+        # 3. Volatilidade Real normalizada de 0 a 100 com base no histórico recente do seu dataframe
+        v_min = df['Volatilidade'].tail(60).min()
+        v_max = df['Volatilidade'].tail(60).max()
+        score_volat = ((volat_val - v_min) / ((v_max - v_min) + 1e-9)) * 100
+        score_volat = max(0.0, min(100.0, score_volat))
 
-        # Define as cores das barras baseado em onde elas estão (0 a 100)
-        def obter_cor_barra(score):
-            if score > 65: return '#00CF85' # Verde (Bom para Compra)
-            if score < 35: return '#ff4b4b' # Vermelho (Bom para Venda)
-            return '#fccf03' # Amarelo (Neutro)
+        # Função simples para mudar as cores das barras baseado em zonas de força técnica
+        def obter_cor_tecnica(score):
+            if score > 65: return '#00CF85' # Verde (Força de Alta)
+            if score < 35: return '#ff4b4b' # Vermelho (Força de Baixa)
+            return '#fccf03' # Amarelo (Neutro / Transição)
 
-        # --- RECRIAÇÃO DO GRÁFICO DE BARRAS VERTICAIS DE 0 A 100 ---
+        # --- SEU NOVO GRÁFICO TÉCNICO EXCLUSIVO (APENAS OS 3 DADOS TÉCNICOS PURISSIMOS) ---
         fig_barras = go.Figure(go.Bar(
-            x=['RSI', 'Tend. Média', 'Direção IA'],
+            x=['RSI', 'Média MA20', 'Volatilidade'],
             y=[score_rsi, score_ma20, score_volat],
-            marker_color=[obter_cor_barra(score_rsi), obter_cor_barra(score_ma20), obter_cor_barra(score_volat)],
+            marker_color=[obter_cor_tecnica(score_rsi), obter_cor_tecnica(score_ma20), obter_cor_tecnica(score_volat)],
             text=[f"{score_rsi:.0f}", f"{score_ma20:.0f}", f"{score_volat:.0f}"],
             textposition='auto'
         ))
@@ -126,13 +128,13 @@ try:
             template="plotly_dark",
             height=200,
             margin=dict(l=10, r=10, t=10, b=10),
-            yaxis=dict(range=[0, 100], gridcolor="#30363d"), # Fixa o eixo Y rigidamente de 0 a 100
+            yaxis=dict(range=[0, 100], gridcolor="#30363d"), # Fixa o teto de 100% rigidamente
             showlegend=False
         )
         st.plotly_chart(fig_barras, use_container_width=True, config={'displayModeBar': False})
         # ----------------------------------------------------------------------
         
-        st.subheader("📝 Valores Brutos")
+        st.subheader("📝 Valores Reais Brutos")
         st.write(f"RSI (14): **{rsi_val:.2f}**")
         st.write(f"Volatilidade: **{volat_val:.4f}**")
         st.write(f"Média (MA20): **{ma20_val:.4f}**")
@@ -153,7 +155,7 @@ try:
 
     st.markdown("---")
 
-    # Área Central: IA e Boleta de Trade
+    # Área Central: IA e Boleta de Trade (Mantidas na área principal da tela)
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
@@ -271,3 +273,4 @@ try:
 
 except Exception as e:
     st.error(f"Sincronizando: {e}")
+
