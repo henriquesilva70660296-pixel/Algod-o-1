@@ -90,32 +90,52 @@ try:
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
         
         st.markdown("---")
-        st.subheader("📊 Dados Técnicos")
+        st.subheader("📊 Força dos Indicadores (0-100)")
+        
         rsi_val = df['RSI'].iloc[-1]
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
 
-        st.write(f"RSI (14): **{rsi_val:.2f}**")
-        st.write(f"Volatilidade: **{volat_val:.4f}**")
-        st.write(f"Média (MA20): **{ma20_val:.4f}**")
+        # --- LÓGICA DE ESCALA 0 A 100 PARA AS BARRAS ---
+        # Barra 1: RSI (já é de 0 a 100)
+        score_rsi = rsi_val
         
-        # --- [ADICIONADO] GRÁFICO DE BARRAS EM TEMPO REAL COMPACTO PARA A SIDEBAR ---
+        # Barra 2: Média Móvel convertida para Direção (Preço vs Média)
+        # Se preço acima da média = Força de alta (>50). Se abaixo = Força de queda (<50).
+        desvio_media = ((preco_atual / ma20_val) - 1) * 100  # Variação %
+        score_ma20 = max(0, min(100, 50 + (desvio_media * 10))) # Centraliza no 50 e dá peso ao desvio
+
+        # Barra 3: Direção Dinâmica Combinada da Tendência do Dia
+        score_volat = prob * 100 
+
+        # Define as cores das barras baseado em onde elas estão (0 a 100)
+        def obter_cor_barra(score):
+            if score > 65: return '#00CF85' # Verde (Bom para Compra)
+            if score < 35: return '#ff4b4b' # Vermelho (Bom para Venda)
+            return '#fccf03' # Amarelo (Neutro)
+
+        # --- RECRIAÇÃO DO GRÁFICO DE BARRAS VERTICAIS DE 0 A 100 ---
         fig_barras = go.Figure(go.Bar(
-            x=['RSI', 'Volat.', 'MA20'],
-            y=[rsi_val, volat_val * 1000, ma20_val * 10], # Multiplicadores para escala visual bater na barra
-            marker_color=['#54a0ff', '#ff9f43', '#00CF85'],
-            text=[f"{rsi_val:.1f}", f"{volat_val:.4f}", f"{ma20_val:.2f}"],
+            x=['RSI', 'Tend. Média', 'Direção IA'],
+            y=[score_rsi, score_ma20, score_volat],
+            marker_color=[obter_cor_barra(score_rsi), obter_cor_barra(score_ma20), obter_cor_barra(score_volat)],
+            text=[f"{score_rsi:.0f}", f"{score_ma20:.0f}", f"{score_volat:.0f}"],
             textposition='auto'
         ))
         fig_barras.update_layout(
             template="plotly_dark",
-            height=180,
+            height=200,
             margin=dict(l=10, r=10, t=10, b=10),
-            yaxis=dict(visible=False), # Oculta o eixo Y para economizar espaço lateral
+            yaxis=dict(range=[0, 100], gridcolor="#30363d"), # Fixa o eixo Y rigidamente de 0 a 100
             showlegend=False
         )
         st.plotly_chart(fig_barras, use_container_width=True, config={'displayModeBar': False})
         # ----------------------------------------------------------------------
+        
+        st.subheader("📝 Valores Brutos")
+        st.write(f"RSI (14): **{rsi_val:.2f}**")
+        st.write(f"Volatilidade: **{volat_val:.4f}**")
+        st.write(f"Média (MA20): **{ma20_val:.4f}**")
         
         st.markdown("---")
         risco_p = st.slider("Risco Operação %", 0.5, 5.0, 2.0)
@@ -170,7 +190,7 @@ try:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Abas (Igual à versão solicitada)
+    # Abas
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
