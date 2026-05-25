@@ -91,9 +91,31 @@ try:
         
         st.markdown("---")
         st.subheader("📊 Dados Técnicos")
-        st.write(f"RSI (14): **{df['RSI'].iloc[-1]:.2f}**")
-        st.write(f"Volatilidade: **{df['Volatilidade'].iloc[-1]:.4f}**")
-        st.write(f"Média (MA20): **{df['MA20'].iloc[-1]:.4f}**")
+        rsi_val = df['RSI'].iloc[-1]
+        volat_val = df['Volatilidade'].iloc[-1]
+        ma20_val = df['MA20'].iloc[-1]
+
+        st.write(f"RSI (14): **{rsi_val:.2f}**")
+        st.write(f"Volatilidade: **{volat_val:.4f}**")
+        st.write(f"Média (MA20): **{ma20_val:.4f}**")
+        
+        # --- [ADICIONADO] GRÁFICO DE BARRAS EM TEMPO REAL COMPACTO PARA A SIDEBAR ---
+        fig_barras = go.Figure(go.Bar(
+            x=['RSI', 'Volat.', 'MA20'],
+            y=[rsi_val, volat_val * 1000, ma20_val * 10], # Multiplicadores para escala visual bater na barra
+            marker_color=['#54a0ff', '#ff9f43', '#00CF85'],
+            text=[f"{rsi_val:.1f}", f"{volat_val:.4f}", f"{ma20_val:.2f}"],
+            textposition='auto'
+        ))
+        fig_barras.update_layout(
+            template="plotly_dark",
+            height=180,
+            margin=dict(l=10, r=10, t=10, b=10),
+            yaxis=dict(visible=False), # Oculta o eixo Y para economizar espaço lateral
+            showlegend=False
+        )
+        st.plotly_chart(fig_barras, use_container_width=True, config={'displayModeBar': False})
+        # ----------------------------------------------------------------------
         
         st.markdown("---")
         risco_p = st.slider("Risco Operação %", 0.5, 5.0, 2.0)
@@ -152,7 +174,7 @@ try:
     tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
     with tab_g:
-        # --- [MOVIDO PARA O TOPO] NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
+        # --- NOVO GRÁFICO EM TEMPO REAL MINUTO A MINUTO ---
         st.subheader("⏱️ Gráfico do Algodão em Tempo Real (1 Minuto)")
         try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
@@ -171,7 +193,7 @@ try:
         except:
             st.caption("Conectando ao fluxo de dados rápidos...")
 
-        # --- SEU GRÁFICO ORIGINAL (FICOU EM SEGUNDO LUGAR) ---
+        # --- SEU GRÁFICO ORIGINAL ---
         st.markdown("---")
         st.subheader("🗓️ Histórico de Médio Prazo (60 Períodos)")
         fig = go.Figure(go.Scatter(y=df['Algodao'].tail(60), line=dict(color=cor_ia, width=3), fill='tozeroy'))
@@ -184,7 +206,7 @@ try:
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
     with tab_c:
-        # --- [MOVIDO PARA O TOPO] NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
+        # --- NOVO GRÁFICO DE CORRELAÇÃO NORMALIZADA EM TEMPO REAL (1 MINUTO) ---
         st.subheader("🔗 Correlação Normalizada em Tempo Real (Hoje, 1 Minuto)")
         try:
             tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
@@ -211,7 +233,7 @@ try:
         except Exception as e:
             st.caption("Sincronizando fluxo macro de alta frequência...")
 
-        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL (FICOU EM SEGUNDO LUGAR) ---
+        # --- SEU GRÁFICO DE CORRELAÇÃO HISTÓRICA ORIGINAL ---
         st.markdown("---")
         fig_c = go.Figure()
         for col in df_norm.columns: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
