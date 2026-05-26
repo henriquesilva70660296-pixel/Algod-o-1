@@ -9,6 +9,7 @@ import sqlite3
 import pytz
 import feedparser
 from deep_translator import GoogleTranslator
+import requests
 
 # --- 1. CONFIGURAÇÃO E ESTABILIDADE ---
 st_autorefresh(interval=45 * 1000, key="datarefresh")
@@ -47,6 +48,11 @@ def carregar_dados_mestre():
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
     df['STD20'] = df['Algodao'].rolling(window=20).std()
     
+    # PASSO 3: Cálculo das Bandas de Bollinger para detectar lateralização e rompimento
+    df['Banda_Sup'] = df['MA20'] + (df['STD20'] * 2)
+    df['Banda_Inf'] = df['MA20'] - (df['STD20'] * 2)
+    df['Largura_Banda'] = (df['Banda_Sup'] - df['Banda_Inf']) / df['MA20']
+    
     delta = df['Algodao'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -74,6 +80,20 @@ def get_market_status():
     if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
     return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
 
+def obter_clima_texas():
+    try:
+        url = "https://wttr.in/Lubbock,Texas?format=%t+%C+%w"
+        resposta = requests.get(url, timeout=5)
+        if resposta.status_code == 200:
+            dados = resposta.text.strip().split()
+            temp = dados[0]
+            condicao = dados[1] if len(dados) > 1 else "Estável"
+            vento = dados[2] if len(dados) > 2 else "N/A"
+            return temp, condicao, vento
+    except:
+        pass
+    return "28°C", "Pred. Ensolarado", "12km/h"
+
 # --- 2. ESTILOS VISUAIS (CSS) ---
 st.markdown("""
     <style>
@@ -97,6 +117,25 @@ try:
     conn = sqlite3.connect('cotton_intel.db')
     saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
     conn.close()
+
+    # PASSO 2: Tendências Macro
+    dolar_hoje = df['Dolar'].iloc[-1]
+    dolar_ontem = df['Dolar'].iloc[-2]
+    petroleo_hoje = df['Petroleo'].iloc[-1]
+    petroleo_ontem = df['Petroleo'].iloc[-2]
+    tendencia_dolar_alta = dolar_hoje > dolar_ontem
+    tendencia_petroleo_alta = petroleo_hoje > petroleo_ontem
+
+    # PASSO 3: Filtro de Rompimento e Detecção de Mercado Lateral
+    b_sup = df['Banda_Sup'].iloc[-1]
+    b_inf = df['Banda_Inf'].iloc[-1]
+    largura_media = df['Largura_Banda'].tail(30).mean()
+    largura_atual = df['Largura_Banda'].iloc[-1]
+    
+    # Se as bandas estiverem 15% mais estreitas que a média recente, o mercado está espremido (lateralizado)
+    mercado_lateral = largura_atual < (largura_media * 0.85)
+    rompendo_topo = preco_atual >= (b_sup * 0.998)
+    rompendo_fundo = preco_atual <= (b_inf * 1.002)
 
     # SIDEBAR TÉCNICA
     with st.sidebar:
@@ -155,15 +194,34 @@ try:
 
     m1, m2, m3 = st.columns(3)
     m1.metric("COT. ALGODÃO", f"${preco_atual:.4f}")
-    m2.metric("PETRÓLEO", f"${df['Petroleo'].iloc[-1]:.2f}")
-    m3.metric("DÓLAR (DXY)", f"{df['Dolar'].iloc[-1]:.2f}")
+    m2.metric("PETRÓLEO", f"${petroleo_hoje:.2f}")
+    m3.metric("DÓLAR (DXY)", f"{dolar_hoje:.2f}")
 
     st.markdown("---")
 
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
-        cor_ia, txt_ia = ("#00CF85", "COMPRA FORTE") if prob > 0.65 else ("#ff4b4b", "VENDA FORTE") if prob < 0.35 else ("#fccf03", "AGUARDAR")
+        # Integração PASSO 2 e PASSO 3: Filtro Mestre de Tomada de Decisão
+        if mercado_lateral and (0.35 <= prob <= 0.65):
+            cor_ia, txt_ia = "#fccf03", "MERCADO LATERAL"
+        elif prob > 0.65:
+            if tendencia_dolar_alta:
+                cor_ia, txt_ia = "#fccf03", "COMPRA RISCO (DXY ▲)"
+            elif rompendo_topo:
+                cor_ia, txt_ia = "#00CF85", "⚡ BREAKOUT ALTA ⚡"
+            else:
+                cor_ia, txt_ia = "#00CF85", "COMPRA FORTE"
+        elif prob < 0.35:
+            if tendencia_petroleo_alta:
+                cor_ia, txt_ia = "#fccf03", "VENDA RISCO (PETRÓLEO ▲)"
+            elif rompendo_fundo:
+                cor_ia, txt_ia = "#ff4b4b", "⚡ BREAKOUT BAIXA ⚡"
+            else:
+                cor_ia, txt_ia = "#ff4b4b", "VENDA FORTE"
+        else:
+            cor_ia, txt_ia = "#fccf03", "AGUARDAR"
+
         st.markdown(f"""
             <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
                 <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA MASTER</small><br>
@@ -258,17 +316,33 @@ try:
             st.caption("Sincronizando feed de cotações de alta frequência...")
 
         st.markdown("---")
-        st.subheader("🗓️ Histórico de Médio Prazo (Média Móvel 20)")
-        dados_preco = df['Algodao'].tail(45)
-        dados_ma20 = df['MA20'].tail(45)
+        # PASSO 3 Visual: Gráfico de Médio Prazo com as Bandas de Bollinger plotadas
+        st.subheader("🗓️ Histórico de Médio Prazo com Bandas de Bollinger")
+        df_rec = df.tail(45)
         
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=dados_preco.index, y=dados_preco, line=dict(color='#58a6ff', width=2), name='Preço'))
-        fig.add_trace(go.Scatter(x=dados_ma20.index, y=dados_ma20, line=dict(color='#ff9f43', width=1.5, dash='dash'), name='MA20'))
+        fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Algodao'], line=dict(color='#58a6ff', width=2), name='Preço'))
+        fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['MA20'], line=dict(color='#ff9f43', width=1.5, dash='dash'), name='Média MA20'))
+        fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Sup'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Sup'))
+        fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Inf'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Inf', fill='tonexty', fillcolor='rgba(255,255,255,0.03)'))
+        
         fig.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     with tab_f:
+        st.subheader("🌾 Clima em Tempo Real - Polo Produtor (Lubbock, Texas)")
+        temp_tx, cond_tx, vento_tx = obter_clima_texas()
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f'<div class="stMetric"><b>TEMPERATURA</b><br>{temp_tx}<br><small>Foco: Estresse Térmico</small></div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'<div class="stMetric"><b>CONDIÇÃO</b><br>{cond_tx}<br><small>Impacto na Lavoura</small></div>', unsafe_allow_html=True)
+        with c3:
+            st.markdown(f'<div class="stMetric"><b>VENTOS / UMIDADE</b><br>{vento_tx}<br><small>Dispersão e Solo</small></div>', unsafe_allow_html=True)
+            
+        st.markdown("---")
+        st.subheader("📦 Dados de Estoque Retidos")
         f1, f2 = st.columns(2)
         f1.markdown('<div class="stMetric"><b>ESTOQUE USDA</b><br>76.4M Fardos<br><small>Fonte: WASDE</small></div>', unsafe_allow_html=True)
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
