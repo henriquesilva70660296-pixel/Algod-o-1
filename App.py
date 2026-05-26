@@ -41,13 +41,7 @@ init_db()
 @st.cache_data(ttl=40)
 def carregar_dados_mestre():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-    dfs = {}
-    for nome, t in tickers.items():
-        coleta = yf.Ticker(t).history(period="2y")
-        if isinstance(coleta.columns, pd.MultiIndex):
-            coleta.columns = coleta.columns.get_level_values(0)
-        dfs[nome] = coleta['Close']
-        
+    dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
     df = pd.DataFrame(dfs).ffill().dropna()
     
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
@@ -80,7 +74,7 @@ def get_market_status():
     if agora.weekday() >= 5: return "🔴 MERCADO FECHADO", "Abre Segunda", "#4a1010"
     return ("🟢 MERCADO ABERTO", "Fecha às 17h", "#104a10") if abertura <= agora <= fechamento else ("🔴 MERCADO FECHADO", "Abre amanhã", "#4a1010")
 
-# --- 2. ESTILO CSS ---
+# --- 2. ESTILOS VISUAIS (CSS) ---
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #161b22; }
@@ -93,7 +87,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. EXECUÇÃO ---
+# --- 3. EXECUÇÃO DO MOTOR MESTRE ---
 try:
     modelo, df, df_norm, features, ponto_divisao = carregar_dados_mestre()
     prob = modelo.predict_proba(df[features].tail(1))[0][1]
@@ -104,7 +98,7 @@ try:
     saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
     conn.close()
 
-    # SIDEBAR
+    # SIDEBAR TÉCNICA
     with st.sidebar:
         st.header("🛡️ Gestão e Técnica")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
@@ -169,7 +163,7 @@ try:
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
-        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.65 else ("#ff4b4b", "VENDA FORTE") if prob < 0.35 else ("#fccf03", "AGUARDAR")
+        cor_ia, txt_ia = ("#00CF85", "COMPRA FORTE") if prob > 0.65 else ("#ff4b4b", "VENDA FORTE") if prob < 0.35 else ("#fccf03", "AGUARDAR")
         st.markdown(f"""
             <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
                 <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA MASTER</small><br>
@@ -185,7 +179,6 @@ try:
             tp_input = st.number_input("Take Profit (Alvo Ganho $):", 0.10, 10.00, 1.00, step=0.10, key="trade_tp")
             sl_input = st.number_input("Stop Loss (Limite Perda $):", 0.10, 5.00, 0.50, step=0.10, key="trade_sl")
             
-            # SEUS BOTÕES ORIGINAIS DO SEU LAYOUT PREFERIDO
             if st.button("🟢 EXECUTAR COMPRA", use_container_width=True):
                 st.session_state.ent = preco_atual
                 st.session_state.q = qtd
@@ -236,32 +229,33 @@ try:
     with tab_g:
         st.subheader("⏱️ Gráfico do Algodão (Tempo Real / 1m)")
         try:
-            dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
+            dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
             if isinstance(dados_vapt.columns, pd.MultiIndex):
                 dados_vapt.columns = dados_vapt.columns.get_level_values(0)
             dados_vapt = dados_vapt.reset_index()
             
             if dados_vapt.empty or len(dados_vapt) < 2:
-                dados_vapt = yf.download(tickers="CT=F", period="5d", interval="30m")
+                dados_vapt = yf.download(tickers="CT=F", period="5d", interval="30m", progress=False)
                 if isinstance(dados_vapt.columns, pd.MultiIndex):
                     dados_vapt.columns = dados_vapt.columns.get_level_values(0)
                 dados_vapt = dados_vapt.reset_index()
             
             if not dados_vapt.empty:
+                eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
                 fig_minuto = go.Figure(go.Scatter(
-                    x=dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date'], 
-                    y=dados_vapt['Close'], mode='lines', 
+                    x=eixo_x_g, y=dados_vapt['Close'], mode='lines', 
                     line=dict(color='#00CF85', width=2), name='Preço'
                 ))
                 fig_minuto.update_layout(
                     template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10),
-                    xaxis=dict(type='category', tickangle=0, nticks=4)
+                    xaxis=dict(type='category', tickangle=0, nticks=4),
+                    yaxis=dict(gridcolor="#30363d")
                 )
-                st.plotly_chart(fig_minuto, use_container_width=True)
+                st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.caption("Aguardando novas oscilações...")
-        except:
-            st.caption("Sincronizando feed de cotações...")
+                st.info("⏱️ Aguardando abertura do mercado para transmissão minuto a minuto...")
+        except Exception as e:
+            st.caption("Sincronizando feed de cotações de alta frequência...")
 
         st.markdown("---")
         st.subheader("🗓️ Histórico de Médio Prazo (Média Móvel 20)")
@@ -272,7 +266,7 @@ try:
         fig.add_trace(go.Scatter(x=dados_preco.index, y=dados_preco, line=dict(color='#58a6ff', width=2), name='Preço'))
         fig.add_trace(go.Scatter(x=dados_ma20.index, y=dados_ma20, line=dict(color='#ff9f43', width=1.5, dash='dash'), name='MA20'))
         fig.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     with tab_f:
         f1, f2 = st.columns(2)
@@ -285,7 +279,7 @@ try:
             tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
             dfs_fast = {}
             for nome, t in tickers_fast.items():
-                coleta_f = yf.download(tickers=t, period="1d", interval="1m")
+                coleta_f = yf.download(tickers=t, period="1d", interval="1m", progress=False)
                 if isinstance(coleta_f.columns, pd.MultiIndex):
                     coleta_f.columns = coleta_f.columns.get_level_values(0)
                 dfs_fast[nome] = coleta_f['Close']
@@ -293,7 +287,6 @@ try:
             df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
 
             if not df_fast.empty:
-                # Normalização dinâmica baseada no primeiro candle do dia
                 eixo_x = df_fast['Datetime'] if 'Datetime' in df_fast.columns else df_fast['Date']
                 df_fast_calc = df_fast[["Algodao", "Petroleo", "Dolar"]]
                 df_fast_norm = (df_fast_calc / df_fast_calc.iloc[0]) * 100
@@ -309,19 +302,19 @@ try:
                     template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10),
                     xaxis=dict(type='category', tickangle=0, nticks=4), legend=dict(orientation="h", y=1.1, x=0)
                 )
-                st.plotly_chart(fig_c_fast, use_container_width=True)
+                st.plotly_chart(fig_c_fast, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.caption("Aguardando novas oscilações do mercado macro...")
+                st.info("🔗 Aguardando abertura das bolsas globais para cálculo de correlação...")
         except Exception as e:
             st.caption("Sincronizando fluxo macro de alta frequência...")
 
         st.markdown("---")
         st.subheader("🔗 Correlação Macro Histórica (2 Anos)")
         fig_c = go.Figure()
-        for col in df_norm.columns: 
+        for col in ["Algodao", "Petroleo", "Dolar"]: 
             fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
-        fig_c.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_c, use_container_width=True)
+        fig_c.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
+        st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
 
     with tab_n:
         feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
@@ -375,13 +368,14 @@ try:
         vitorias = sum(1 for t in trades_executados if t > 0)
         taxa_acerto = (vitorias / total_trades * 100) if total_trades > 0 else 0.0
         
-        b1, b2 = st.columns(2)
-        b1.metric("Retorno Real", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
-        b2.metric("Acertos", f"{taxa_acerto:.1f}%", f"{vitorias}W / {total_trades - vitorias}L")
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Resultado Realista", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
+        b2.metric("Taxa de Acerto Real", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
+        b3.metric("Total de Trades", f"{total_trades} ordens")
         
         fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=2.5)))
         fig_back.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_back, use_container_width=True)
+        st.plotly_chart(fig_back, use_container_width=True, config={'displayModeBar': False})
 
 except Exception as e:
     st.error(f"Sincronizando motores: {e}")
