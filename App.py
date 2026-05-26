@@ -20,7 +20,6 @@ def init_db():
     c.execute('CREATE TABLE IF NOT EXISTS conta (id INTEGER PRIMARY KEY, saldo REAL)')
     c.execute('CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, data TEXT, tipo TEXT, entrada REAL, saida REAL, lucro REAL, confianca REAL, stop_loss REAL, take_profit REAL)')
     
-    # Garante que as colunas novas existam caso o banco já tenha sido criado no passado
     try:
         c.execute('ALTER TABLE trades ADD COLUMN confianca REAL DEFAULT 0.5')
     except: pass
@@ -92,7 +91,7 @@ try:
     saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
     conn.close()
 
-    # SIDEBAR COM DADOS TÉCNICOS (Gráfico 0-100 Calibrado)
+    # SIDEBAR COM DADOS TÉCNICOS
     with st.sidebar:
         st.header("🛡️ Gestão e Técnica")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
@@ -104,9 +103,7 @@ try:
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
 
-        # Conversão Matemática Escala 0 a 100
         score_rsi = max(0.0, min(100.0, rsi_val))
-        
         desvio_media = ((preco_atual / ma20_val) - 1) * 100
         score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 120))) 
 
@@ -120,7 +117,6 @@ try:
             if score < 40: return '#ff4b4b'
             return '#fccf03'
 
-        # Desenho das Barras Verticais Técnicas Puras
         fig_barras = go.Figure(go.Bar(
             x=['RSI', 'Média MA20', 'Volatilidade'],
             y=[score_rsi, score_ma20, score_volat],
@@ -129,11 +125,8 @@ try:
             textposition='auto'
         ))
         fig_barras.update_layout(
-            template="plotly_dark",
-            height=200,
-            margin=dict(l=10, r=10, t=10, b=10),
-            yaxis=dict(range=[0, 100], gridcolor="#30363d"),
-            showlegend=False
+            template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10),
+            yaxis=dict(range=[0, 100], gridcolor="#30363d"), showlegend=False
         )
         st.plotly_chart(fig_barras, use_container_width=True, config={'displayModeBar': False})
         
@@ -147,7 +140,6 @@ try:
         lote = int((saldo_atual * (risco_p/100)) / ((volat * 2) * 100)) if volat > 0 else 10
         st.caption(f"Lote Sugerido: {lote} Ct")
 
-    # Status e Métricas de Topo
     st_lab, t_lab, color = get_market_status()
     st.markdown(f'<div class="status-card" style="background-color: {color};">{st_lab} | {t_lab}</div>', unsafe_allow_html=True)
 
@@ -158,7 +150,6 @@ try:
 
     st.markdown("---")
 
-    # Área Central: Painel da IA e Boleta com Stop Automático
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
@@ -173,8 +164,6 @@ try:
 
     with col_trade:
         st.markdown('<div class="trading-box">', unsafe_allow_html=True)
-        
-        # Estado 1: Sem ordens abertas -> Mostra inputs de alvo
         if 'ent' not in st.session_state:
             qtd = st.number_input("Quantidade:", 1, 5000, lote)
             tp_input = st.number_input("Take Profit (Alvo Ganho $):", 0.10, 10.00, 1.00, step=0.10)
@@ -187,7 +176,6 @@ try:
                 st.session_state.tp = preco_atual + tp_input
                 st.session_state.sl = preco_atual - sl_input
                 st.rerun()
-                
             if st.button("🔴 EXECUTAR VENDA", use_container_width=True):
                 st.session_state.ent = preco_atual
                 st.session_state.q = qtd
@@ -195,8 +183,6 @@ try:
                 st.session_state.tp = preco_atual - tp_input
                 st.session_state.sl = preco_atual + sl_input
                 st.rerun()
-                
-        # Estado 2: Ordem Aberta -> Sistema monitora as saídas a cada atualização
         else:
             mult = 1 if st.session_state.tipo == "LONG" else -1
             lucro_v = (preco_atual - st.session_state.ent) * st.session_state.q * mult
@@ -219,19 +205,16 @@ try:
                     gatilho_fechamento = True
                     motivo_fechamento = "🛡️ STOP LOSS ACIONADO!"
             
-            # Executa fechamento automático caso encoste nos alvos
             if gatilho_fechamento:
                 c = sqlite3.connect('cotton_intel.db')
                 c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
                 c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
                          (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
-                c.commit()
-                c.close()
+                c.commit(); c.close()
                 st.toast(f"{motivo_fechamento} Lucro: ${lucro_v:,.2f}")
                 del st.session_state.ent
                 st.rerun()
             
-            # Painel visual do Trade Ativo
             st.metric(f"Posição {st.session_state.tipo}", f"${lucro_v:,.2f}", delta=f"{((preco_atual/st.session_state.ent)-1)*100*mult:.2f}%")
             st.caption(f"Alvo Ganho (TP): **${st.session_state.tp:.2f}** | Limite Perda (SL): **${st.session_state.sl:.2f}**")
             
@@ -240,15 +223,13 @@ try:
                 c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
                 c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
                          (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
-                c.commit()
-                c.close()
+                c.commit(); c.close()
                 del st.session_state.ent
                 st.rerun()
-                
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Abas Operacionais
-    tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
+    # Abas Operacionais (ABAS ATUALIZADAS: Adicionado o painel de Backtest)
+    tab_g, tab_f, tab_c, tab_n, tab_b = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar", "📈 Backtest IA"])
 
     with tab_g:
         st.subheader("⏱️ Gráfico do Algodão em Tempo Real (1 Minuto)")
@@ -256,11 +237,8 @@ try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m")
             if not dados_vapt.empty:
                 fig_minuto = go.Figure(go.Scatter(
-                    x=dados_vapt.index, 
-                    y=dados_vapt['Close'], 
-                    mode='lines+markers', 
-                    line=dict(color='#00CF85', width=2),
-                    name='Preço Rápido'
+                    x=dados_vapt.index, y=dados_vapt['Close'], mode='lines+markers', 
+                    line=dict(color='#00CF85', width=2), name='Preço Rápido'
                 ))
                 fig_minuto.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig_minuto, use_container_width=True)
@@ -271,14 +249,12 @@ try:
 
         st.markdown("---")
         st.subheader("🗓️ Histórico de Médio Prazo com Média Móvel (60 Períodos)")
-        
         dados_preco = df['Algodao'].tail(60)
         dados_ma20 = df['MA20'].tail(60)
         
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=dados_preco.index, y=dados_preco, line=dict(color=cor_ia, width=3), fill='tozeroy', name='Preço Algodão'))
         fig.add_trace(go.Scatter(x=dados_ma20.index, y=dados_ma20, line=dict(color='#ff9f43', width=2, dash='dash'), name='Média MA20'))
-        
         fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=1.1, x=0))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -317,10 +293,75 @@ try:
         feed = feedparser.parse("https://news.google.com/rss/search?q=cotton+market+price+usda&hl=en-US&gl=US&ceid=US:en")
         translator = GoogleTranslator(source='en', target='pt')
         for n in feed.entries[:5]:
-            try:
-                st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
-            except:
-                st.write(n.title)
+            try: st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
+            except: st.write(n.title)
+
+    # --- NOVA ABA: MOTOR DE BACKTESTING HISTÓRICO DA IA (ITEM 1) ---
+    with tab_b:
+        st.subheader("🕵️ Simulação Histórica de Lucro da IA")
+        st.caption("Estratégia: Entra no sinal Forte (>70% ou <30%) e encerra quando o sinal reverte.")
+        
+        # Gera as probabilidades de IA para todo o histórico de teste (últimos 200 períodos)
+        df_back = df.tail(200).copy()
+        prob_historica = modelo.predict_proba(df_back[features])[:, 1]
+        df_back['Prob_IA'] = prob_historica
+        
+        capital_inicial = 100000.0
+        capital = capital_inicial
+        posicao = None  # Pode ser "LONG", "SHORT" ou None
+        preco_entrada = 0.0
+        historico_capital = []
+        trades_executados = []
+        
+        # Loop de simulação linha a linha (Passado rumo ao Presente)
+        for i in range(len(df_back)):
+            preco_hist = df_back['Algodao'].iloc[i]
+            p_ia = df_back['Prob_IA'].iloc[i]
+            data_hist = df_back.index[i].strftime("%d/%m/%y")
+            
+            # 1. Se estiver posicionado, verifica se o sinal inverteu para fechar
+            if posicao == "LONG":
+                if p_ia <= 0.50: # Sinal enfraqueceu ou virou venda
+                    lucro_trade = (preco_hist - preco_entrada) * 1000 # Simulação com lote fixo padrão de 1000ct
+                    capital += lucro_trade
+                    trades_executados.append(lucro_trade)
+                    posicao = None
+            elif posicao == "SHORT":
+                if p_ia >= 0.50: # Sinal enfraqueceu ou virou compra
+                    lucro_trade = (preco_entrada - preco_hist) * 1000
+                    capital += lucro_trade
+                    trades_executados.append(lucro_trade)
+                    posicao = None
+            
+            # 2. Se estiver fora do mercado, busca gatilhos fortes da IA para entrar
+            if posicao is None:
+                if p_ia > 0.72:
+                    posicao = "LONG"
+                    preco_entrada = preco_hist
+                elif p_ia < 0.28:
+                    posicao = "SHORT"
+                    preco_entrada = preco_hist
+                    
+            historico_capital.append(capital)
+            
+        # Cálculos de Métricas de Performance
+        lucro_total_back = capital - capital_inicial
+        total_trades = len(trades_executados)
+        vitorias = sum(1 for t in trades_executados if t > 0)
+        taxa_acerto = (vitorias / total_trades * 100) if total_trades > 0 else 0.0
+        
+        # Exibição dos Resultados do Backtest na tela
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Resultado Acumulado", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
+        b2.metric("Taxa de Acerto da IA", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
+        b3.metric("Total de Trades", f"{total_trades} ordens")
+        
+        # Gráfico da Curva de Capital (Patrimônio crescendo)
+        st.markdown("---")
+        st.subheader("📈 Curva de Crescimento do Capital Simulado")
+        fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=3), name='Evolução do Saldo'))
+        fig_back.update_layout(template="plotly_dark", height=250, margin=dict(l=0,r=0,t=0,b=0))
+        st.plotly_chart(fig_back, use_container_width=True)
 
 except Exception as e:
     st.error(f"Sincronizando: {e}")
