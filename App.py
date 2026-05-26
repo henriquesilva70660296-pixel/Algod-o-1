@@ -316,7 +316,7 @@ try:
                 st.caption("🌙 Mercado Fechado: Mostrando histórico estendido (15m) + Projeção Preditiva da IA")
                 fator_direcao = 1 if prob >= 0.5 else -1
                 intensidade = abs(prob - 0.5) * 2 * (volat * 1.5)
-                preco_projetado = ultimo_preco + (fator_direcao * intensity) if 'intensity' in locals() else ultimo_preco + (fator_direcao * intensidade)
+                preco_projetado = ultimo_preco + (fator_direcao * intensidade)
                 
                 tempos_futuros = []
                 base_time = ultimo_tempo if isinstance(ultimo_tempo, datetime) else datetime.now()
@@ -365,7 +365,7 @@ try:
             dfs_fast = {}
             usando_fallback_macro = False
             
-            # 1. Tenta carregar dados ao vivo de 1m
+            # 1. Tenta carregar dados de 1 minuto ao vivo
             for nome, t in tickers_fast.items():
                 coleta_f = yf.download(tickers=t, period="1d", interval="1m", progress=False)
                 if isinstance(coleta_f.columns, pd.MultiIndex):
@@ -373,7 +373,7 @@ try:
                 dfs_fast[nome] = coleta_f['Close']
             df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
 
-            # 2. Fallback estratégico: Se vazio, puxa histórico de 5 dias (15m)
+            # 2. Fallback: Se vazio (mercado fechado), puxa histórico consolidado de 15 minutos dos últimos 5 dias
             if df_fast.empty or len(df_fast) < 5:
                 dfs_fast = {}
                 for nome, t in tickers_fast.items():
@@ -392,11 +392,11 @@ try:
                 fig_c_fast = go.Figure()
                 colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
                 
-                # Linhas normais (Histórico recente de 15m)
+                # Plotagem das linhas do histórico recente normalizado
                 for col in df_fast_norm.columns:
                     fig_c_fast.add_trace(go.Scatter(x=eixo_x_macro, y=df_fast_norm[col], name=f"{col} (Real)", line=dict(color=colors_fast.get(col), width=2)))
                 
-                # Se mercado fechado, gera as linhas pontilhadas de projeção sincronizadas para os 3 ativos
+                # Se o mercado estiver fechado, gera as projeções macro sincronizadas baseadas na IA
                 if usando_fallback_macro:
                     st.caption("🌙 Fora do horário comercial: Exibindo histórico consolidado (15m) + Projeções de Reabertura Sincronizadas")
                     ultimo_tempo_m = eixo_x_macro.iloc[-1]
@@ -405,10 +405,9 @@ try:
                     tempos_futuros_m = [base_time_m + timedelta(minutes=m) for m in range(15, 61, 15)]
                     x_proj_m = [ultimo_tempo_m] + tempos_futuros_m
                     
-                    # Definição das direções macro correlacionadas
                     fator_alg = 1 if prob >= 0.5 else -1
-                    fator_pet = 1 if prob >= 0.48 else -1  # Correlação direta leve
-                    fator_dol = -1 if prob >= 0.5 else 1   # Correlação estritamente inversa com o DXY
+                    fator_pet = 1 if prob >= 0.48 else -1  # Correlação direta de energia
+                    fator_dol = -1 if prob >= 0.5 else 1   # Correlação inversa clássica do DXY com as commodities
                     
                     for col, fator, cor in [("Algodao", fator_alg, "#00CF85"), ("Petroleo", fator_pet, "#ff9f43"), ("Dolar", fator_dol, "#54a0ff")]:
                         u_val = df_fast_norm[col].iloc[-1]
@@ -423,7 +422,7 @@ try:
                 fig_c_fast.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(type='category', nticks=5), legend=dict(orientation="h", y=1.1, x=0))
                 st.plotly_chart(fig_c_fast, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.info("🔗 Aguardando sincronização com as bolsas de Chicago e NY...")
+                st.info("🔗 Aguardando sincronização com as bolsas globais...")
         except Exception as e:
             st.caption("Sincronizando fluxo macro preditivo...")
 
