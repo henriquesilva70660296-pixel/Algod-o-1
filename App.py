@@ -46,6 +46,8 @@ def carregar_dados_mestre():
     
     # Inteligência Técnica
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
+    df['STD20'] = df['Algodao'].rolling(window=20).std() # Necessário para a calibração da barra
+    
     delta = df['Algodao'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -60,8 +62,7 @@ def carregar_dados_mestre():
     
     features = ['Algodao', 'Petroleo', 'Dolar', 'MA20', 'RSI']
     
-    # --- MODELO BLINDADO (SEPARAÇÃO TEMPORAL PARA COMPATIBILIDADE REAL) ---
-    # Usa os primeiros 80% dos dados históricos estritamente para o Treino
+    # Separação Temporal Walk-Forward (80% treino / 20% teste)
     ponto_divisao = int(len(df) * 0.80)
     df_treino = df.iloc[:ponto_divisao]
     
@@ -102,7 +103,7 @@ try:
 
     # SIDEBAR COM DADOS TÉCNICOS
     with st.sidebar:
-        st.header("🛡️ Gestão e Technique")
+        st.header("🛡️ Gestão e Técnica")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
         
         st.markdown("---")
@@ -111,10 +112,15 @@ try:
         rsi_val = df['RSI'].iloc[-1]
         volat_val = df['Volatilidade'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
+        std_val = df['STD20'].iloc[-1] if 'STD20' in df.columns else 0.5
 
+        # --- RECALIBRAÇÃO MATEMÁTICA DA BARRA CENTRAL MA20 (MUNDO REAL) ---
         score_rsi = max(0.0, min(100.0, rsi_val))
-        desvio_media = ((preco_atual / ma20_val) - 1) * 100
-        score_ma20 = max(0.0, min(100.0, 50.0 + (desvio_media * 120))) 
+        
+        # Uso do Z-Score Suavizado para commodities coladas na média móvel
+        z_score = (preco_atual - ma20_val) / (std_val + 1e-9)
+        score_ma20 = 50.0 + (z_score * 25.0) # Converte o desvio estatístico em um range harmônico de 0 a 100
+        score_ma20 = max(0.0, min(100.0, score_ma20))
 
         v_min = df['Volatilidade'].tail(60).min()
         v_max = df['Volatilidade'].tail(60).max()
@@ -122,10 +128,11 @@ try:
         score_volat = max(0.0, min(100.0, score_volat))
 
         def obter_cor_tecnica(score):
-            if score > 60: return '#00CF85'
-            if score < 40: return '#ff4b4b'
-            return '#fccf03'
+            if score > 55: return '#00CF85'   # Tendência de alta (Verde)
+            if score < 45: return '#ff4b4b'   # Tendência de baixa (Vermelho)
+            return '#fccf03'                  # Lateralizado (Amarelo)
 
+        # Gráfico das barras verticais laterais corrigido e blindado
         fig_barras = go.Figure(go.Bar(
             x=['RSI', 'Média MA20', 'Volatilidade'],
             y=[score_rsi, score_ma20, score_volat],
@@ -310,7 +317,6 @@ try:
         st.subheader("🕵️ Simulação com Dados Inéditos (Mundo Real)")
         st.caption("A IA treinou com os primeiros 80% do histórico e este teste roda nos 20% finais de dados inéditos.")
         
-        # O teste roda APENAS nos 20% finais do dataframe (dados novos para a IA)
         df_back = df.iloc[ponto_divisao:].copy()
         prob_historica = modelo.predict_proba(df_back[features])[:, 1]
         df_back['Prob_IA'] = prob_historica
@@ -328,7 +334,7 @@ try:
             
             if posicao == "LONG":
                 if p_ia <= 0.50:
-                    lucro_trade = (preco_hist - preco_entrada) * 3000  # Padrão 3000 fardos
+                    lucro_trade = (preco_hist - preco_entrada) * 3000  
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
                     posicao = None
@@ -340,7 +346,7 @@ try:
                     posicao = None
             
             if posicao is None:
-                if p_ia > 0.60:    # Gatilhos ajustados para o modelo realista
+                if p_ia > 0.60:    
                     posicao = "LONG"
                     preco_entrada = preco_hist
                 elif p_ia < 0.40:
@@ -367,4 +373,3 @@ try:
 
 except Exception as e:
     st.error(f"Sincronizando: {e}")
-
