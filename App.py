@@ -44,22 +44,31 @@ def carregar_dados_mestre():
     dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
     df = pd.DataFrame(dfs).ffill().dropna()
     
-    # Inteligência v3.1
+    # Inteligência Técnica
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
     delta = df['Algodao'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / (loss + 1e-9)
     df['RSI'] = 100 - (100 / (1 + rs))
-    
     df['Volatilidade'] = df['Algodao'].diff().abs().rolling(14).mean()
     df_norm = (df / df.iloc[0]) * 100
-    df['Target'] = (df['Algodao'].shift(-1) > (df['Algodao'] * 1.0005)).astype(int)
+    
+    # Target de predição curta
+    df['Target'] = (df['Algodao'].shift(-1) > (df['Algodao'] * 1.0003)).astype(int)
+    df.dropna(inplace=True)
     
     features = ['Algodao', 'Petroleo', 'Dolar', 'MA20', 'RSI']
-    modelo = RandomForestClassifier(n_estimators=300, random_state=42).fit(df[features][:-1], df['Target'][:-1])
     
-    return modelo, df, df_norm, features
+    # --- MODELO BLINDADO (SEPARAÇÃO TEMPORAL PARA COMPATIBILIDADE REAL) ---
+    # Usa os primeiros 80% dos dados históricos estritamente para o Treino
+    ponto_divisao = int(len(df) * 0.80)
+    df_treino = df.iloc[:ponto_divisao]
+    
+    modelo = RandomForestClassifier(n_estimators=150, max_depth=8, random_state=42)
+    modelo.fit(df_treino[features], df_treino['Target'])
+    
+    return modelo, df, df_norm, features, ponto_divisao
 
 def get_market_status():
     tz = pytz.timezone('America/Sao_Paulo')
@@ -82,7 +91,7 @@ st.markdown("""
 
 # --- 3. EXECUÇÃO ---
 try:
-    modelo, df, df_norm, features = carregar_dados_mestre()
+    modelo, df, df_norm, features, ponto_divisao = carregar_dados_mestre()
     prob = modelo.predict_proba(df[features].tail(1))[0][1]
     preco_atual = df['Algodao'].iloc[-1]
     volat = df['Volatilidade'].iloc[-1]
@@ -93,7 +102,7 @@ try:
 
     # SIDEBAR COM DADOS TÉCNICOS
     with st.sidebar:
-        st.header("🛡️ Gestão e Técnica")
+        st.header("🛡️ Gestão e Technique")
         st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
         
         st.markdown("---")
@@ -153,7 +162,7 @@ try:
     col_ia, col_trade = st.columns([1.5, 1])
 
     with col_ia:
-        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.70 else ("#ff4b4b", "VENDA FORTE") if prob < 0.30 else ("#fccf03", "AGUARDAR")
+        cor_ia, txt_ia = ("#deff9a", "COMPRA FORTE") if prob > 0.65 else ("#ff4b4b", "VENDA FORTE") if prob < 0.35 else ("#fccf03", "AGUARDAR")
         st.markdown(f"""
             <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
                 <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA MASTER</small><br>
@@ -228,7 +237,7 @@ try:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Abas Operacionais (ABAS ATUALIZADAS: Adicionado o painel de Backtest)
+    # Abas Operacionais
     tab_g, tab_f, tab_c, tab_n, tab_b = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar", "📈 Backtest IA"])
 
     with tab_g:
@@ -296,72 +305,66 @@ try:
             try: st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
             except: st.write(n.title)
 
-    # --- NOVA ABA: MOTOR DE BACKTESTING HISTÓRICO DA IA (ITEM 1) ---
+    # --- ABA DE BACKTEST REALÍSTICA (OUT-OF-SAMPLE) ---
     with tab_b:
-        st.subheader("🕵️ Simulação Histórica de Lucro da IA")
-        st.caption("Estratégia: Entra no sinal Forte (>70% ou <30%) e encerra quando o sinal reverte.")
+        st.subheader("🕵️ Simulação com Dados Inéditos (Mundo Real)")
+        st.caption("A IA treinou com os primeiros 80% do histórico e este teste roda nos 20% finais de dados inéditos.")
         
-        # Gera as probabilidades de IA para todo o histórico de teste (últimos 200 períodos)
-        df_back = df.tail(200).copy()
+        # O teste roda APENAS nos 20% finais do dataframe (dados novos para a IA)
+        df_back = df.iloc[ponto_divisao:].copy()
         prob_historica = modelo.predict_proba(df_back[features])[:, 1]
         df_back['Prob_IA'] = prob_historica
         
         capital_inicial = 100000.0
         capital = capital_inicial
-        posicao = None  # Pode ser "LONG", "SHORT" ou None
+        posicao = None
         preco_entrada = 0.0
         historico_capital = []
         trades_executados = []
         
-        # Loop de simulação linha a linha (Passado rumo ao Presente)
         for i in range(len(df_back)):
             preco_hist = df_back['Algodao'].iloc[i]
             p_ia = df_back['Prob_IA'].iloc[i]
-            data_hist = df_back.index[i].strftime("%d/%m/%y")
             
-            # 1. Se estiver posicionado, verifica se o sinal inverteu para fechar
             if posicao == "LONG":
-                if p_ia <= 0.50: # Sinal enfraqueceu ou virou venda
-                    lucro_trade = (preco_hist - preco_entrada) * 1000 # Simulação com lote fixo padrão de 1000ct
+                if p_ia <= 0.50:
+                    lucro_trade = (preco_hist - preco_entrada) * 3000  # Padrão 3000 fardos
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
                     posicao = None
             elif posicao == "SHORT":
-                if p_ia >= 0.50: # Sinal enfraqueceu ou virou compra
-                    lucro_trade = (preco_entrada - preco_hist) * 1000
+                if p_ia >= 0.50:
+                    lucro_trade = (preco_entrada - preco_hist) * 3000
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
                     posicao = None
             
-            # 2. Se estiver fora do mercado, busca gatilhos fortes da IA para entrar
             if posicao is None:
-                if p_ia > 0.72:
+                if p_ia > 0.60:    # Gatilhos ajustados para o modelo realista
                     posicao = "LONG"
                     preco_entrada = preco_hist
-                elif p_ia < 0.28:
+                elif p_ia < 0.40:
                     posicao = "SHORT"
                     preco_entrada = preco_hist
                     
             historico_capital.append(capital)
             
-        # Cálculos de Métricas de Performance
         lucro_total_back = capital - capital_inicial
         total_trades = len(trades_executados)
         vitorias = sum(1 for t in trades_executados if t > 0)
         taxa_acerto = (vitorias / total_trades * 100) if total_trades > 0 else 0.0
         
-        # Exibição dos Resultados do Backtest na tela
         b1, b2, b3 = st.columns(3)
-        b1.metric("Resultado Acumulado", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
-        b2.metric("Taxa de Acerto da IA", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
+        b1.metric("Resultado Realista", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
+        b2.metric("Taxa de Acerto Real", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
         b3.metric("Total de Trades", f"{total_trades} ordens")
         
-        # Gráfico da Curva de Capital (Patrimônio crescendo)
         st.markdown("---")
-        st.subheader("📈 Curva de Crescimento do Capital Simulado")
-        fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=3), name='Evolução do Saldo'))
+        st.subheader("📈 Curva de Patrimônio Líquido Inédito")
+        fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=3), name='Saldo Real'))
         fig_back.update_layout(template="plotly_dark", height=250, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig_back, use_container_width=True)
 
 except Exception as e:
     st.error(f"Sincronizando: {e}")
+
