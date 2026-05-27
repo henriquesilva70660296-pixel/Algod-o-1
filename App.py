@@ -452,6 +452,4 @@ try:
         b2.metric("Taxa de Acerto Real", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
         b3.metric("Total de Trades", f"{total_trades} ordens")
         
-        fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=2.5)))
-        fig_back.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
-        st
+        
