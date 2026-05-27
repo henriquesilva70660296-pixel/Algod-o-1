@@ -42,7 +42,15 @@ init_db()
 @st.cache_data(ttl=40)
 def carregar_dados_mestre():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-    dfs = {nome: yf.Ticker(t).history(period="2y")['Close'] for nome, t in tickers.items()}
+    
+    # Tratamento seguro de extração dos dados históricos de fechamento
+    dfs = {}
+    for nome, t in tickers.items():
+        coleta = yf.Ticker(t).history(period="2y")
+        if isinstance(coleta.columns, pd.MultiIndex):
+            coleta.columns = coleta.columns.get_level_values(0)
+        dfs[nome] = coleta['Close']
+        
     df = pd.DataFrame(dfs).ffill().dropna()
     
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
@@ -290,7 +298,10 @@ try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
             if isinstance(dados_vapt.columns, pd.MultiIndex):
                 dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-            dados_vapt = dados_vapt.reset_index()
+            if not dados_vapt.empty:
+                dados_vapt = dados_vapt.reset_index()
+                # Unifica o nome da coluna de tempo independente do retorno do yfinance
+                dados_vapt.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in dados_vapt.columns]
         except:
             pass
             
@@ -299,18 +310,19 @@ try:
                 dados_vapt = yf.download(tickers="CT=F", period="5d", interval="15m", progress=False)
                 if isinstance(dados_vapt.columns, pd.MultiIndex):
                     dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-                dados_vapt = dados_vapt.reset_index()
-                usando_fallback = True
+                if not dados_vapt.empty:
+                    dados_vapt = dados_vapt.reset_index()
+                    dados_vapt.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in dados_vapt.columns]
+                    usando_fallback = True
             except:
                 pass
 
-        if not dados_vapt.empty:
-            eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
-            ultimo_tempo = eixo_x_g.iloc[-1]
+        if not dados_vapt.empty and 'Datetime' in dados_vapt.columns:
+            ultimo_tempo = dados_vapt['Datetime'].iloc[-1]
             ultimo_preco = dados_vapt['Close'].iloc[-1]
             
             fig_minuto = go.Figure()
-            fig_minuto.add_trace(go.Scatter(x=eixo_x_g, y=dados_vapt['Close'], mode='lines', line=dict(color='#00CF85', width=2), name='Preço Histórico'))
+            fig_minuto.add_trace(go.Scatter(x=dados_vapt['Datetime'], y=dados_vapt['Close'], mode='lines', line=dict(color='#00CF85', width=2), name='Preço Histórico'))
             
             if usando_fallback:
                 st.caption("🌙 Mercado Fechado: Mostrando histórico estendido (15m) + Projeção Preditiva da IA")
@@ -365,15 +377,19 @@ try:
             dfs_fast = {}
             usando_fallback_macro = False
             
-            # 1. Tenta carregar dados de 1 minuto ao vivo
+            # 1. Tenta carregar dados ao vivo de 1m
             for nome, t in tickers_fast.items():
                 coleta_f = yf.download(tickers=t, period="1d", interval="1m", progress=False)
                 if isinstance(coleta_f.columns, pd.MultiIndex):
                     coleta_f.columns = coleta_f.columns.get_level_values(0)
                 dfs_fast[nome] = coleta_f['Close']
-            df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
+            df_fast = pd.DataFrame(dfs_fast).ffill().dropna()
+            
+            if not df_fast.empty:
+                df_fast = df_fast.reset_index()
+                df_fast.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in df_fast.columns]
 
-            # 2. Fallback: Se vazio (mercado fechado), puxa histórico consolidado de 15 minutos dos últimos 5 dias
+            # 2. Fallback se estiver fora do horário de pregão
             if df_fast.empty or len(df_fast) < 5:
                 dfs_fast = {}
                 for nome, t in tickers_fast.items():
@@ -382,36 +398,34 @@ try:
                         coleta_f.columns = coleta_f.columns.get_level_values(0)
                     dfs_fast[nome] = coleta_f['Close']
                 df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
+                df_fast.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in df_fast.columns]
                 usando_fallback_macro = True
 
-            if not df_fast.empty:
-                eixo_x_macro = df_fast['Datetime'] if 'Datetime' in df_fast.columns else df_fast['Date']
+            if not df_fast.empty and 'Datetime' in df_fast.columns:
                 df_fast_calc = df_fast[["Algodao", "Petroleo", "Dolar"]]
                 df_fast_norm = (df_fast_calc / df_fast_calc.iloc[0]) * 100
                 
                 fig_c_fast = go.Figure()
                 colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
                 
-                # Plotagem das linhas do histórico recente normalizado
                 for col in df_fast_norm.columns:
-                    fig_c_fast.add_trace(go.Scatter(x=eixo_x_macro, y=df_fast_norm[col], name=f"{col} (Real)", line=dict(color=colors_fast.get(col), width=2)))
+                    fig_c_fast.add_trace(go.Scatter(x=df_fast['Datetime'], y=df_fast_norm[col], name=f"{col} (Real)", line=dict(color=colors_fast.get(col), width=2)))
                 
-                # Se o mercado estiver fechado, gera as projeções macro sincronizadas baseadas na IA
                 if usando_fallback_macro:
                     st.caption("🌙 Fora do horário comercial: Exibindo histórico consolidado (15m) + Projeções de Reabertura Sincronizadas")
-                    ultimo_tempo_m = eixo_x_macro.iloc[-1]
+                    ultimo_tempo_m = df_fast['Datetime'].iloc[-1]
                     base_time_m = ultimo_tempo_m if isinstance(ultimo_tempo_m, datetime) else datetime.now()
                     
                     tempos_futuros_m = [base_time_m + timedelta(minutes=m) for m in range(15, 61, 15)]
                     x_proj_m = [ultimo_tempo_m] + tempos_futuros_m
                     
                     fator_alg = 1 if prob >= 0.5 else -1
-                    fator_pet = 1 if prob >= 0.48 else -1  # Correlação direta de energia
-                    fator_dol = -1 if prob >= 0.5 else 1   # Correlação inversa clássica do DXY com as commodities
+                    fator_pet = 1 if prob >= 0.48 else -1
+                    fator_dol = -1 if prob >= 0.5 else 1
                     
-                    for col, fator, cor in [("Algodao", fator_alg, "#00CF85"), ("Petroleo", fator_pet, "#ff9f43"), ("Dolar", fator_dol, "#54a0ff")]:
+                    for col, factor, cor in [("Algodao", fator_alg, "#00CF85"), ("Petroleo", fator_pet, "#ff9f43"), ("Dolar", fator_dol, "#54a0ff")]:
                         u_val = df_fast_norm[col].iloc[-1]
-                        v_esperada = abs(prob - 0.5) * 3.5 * fator
+                        v_esperada = abs(prob - 0.5) * 3.5 * factor
                         val_projetado = u_val + v_esperada
                         y_proj_m = [u_val + ((val_projetado - u_val) * (k/4)) for k in range(0, 5)]
                         
@@ -468,31 +482,4 @@ try:
                     lucro_trade = (preco_entrada - preco_hist) * 3000
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
-                    posicao = None
-            
-            if posicao is None:
-                if p_ia > 0.60:    
-                    posicao = "LONG"
-                    preco_entrada = preco_hist
-                elif p_ia < 0.40:
-                    posicao = "SHORT"
-                    preco_entrada = preco_hist
-                    
-            historico_capital.append(capital)
-            
-        lucro_total_back = capital - capital_inicial
-        total_trades = len(trades_executados)
-        vitorias = sum(1 for t in trades_executados if t > 0)
-        taxa_acerto = (vitorias / total_trades * 100) if total_trades > 0 else 0.0
-        
-        b1, b2, b3 = st.columns(3)
-        b1.metric("Resultado Realista", f"${lucro_total_back:+,.2f}", delta=f"{(lucro_total_back/capital_inicial)*100:+.2f}%")
-        b2.metric("Taxa de Acerto Real", f"{taxa_acerto:.1f}%", f"{vitorias} Gain / {total_trades - vitorias} Loss")
-        b3.metric("Total de Trades", f"{total_trades} ordens")
-        
-        fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=2.5)))
-        fig_back.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_back, use_container_width=True, config={'displayModeBar': False})
-
-except Exception as e:
-    st.error(f"Sincronizando motores: {e}")
+                    pos
