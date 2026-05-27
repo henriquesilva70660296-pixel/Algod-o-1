@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime, timedelta
+from datetime import datetime
 import sqlite3
 import pytz
 import feedparser
@@ -46,6 +46,7 @@ def carregar_dados_mestre():
     dfs = {}
     for nome, t in tickers.items():
         coleta = yf.Ticker(t).history(period="2y")
+        # Garante a limpeza de tabelas multi-index do yfinance
         if isinstance(coleta.columns, pd.MultiIndex):
             coleta.columns = coleta.columns.get_level_values(0)
         dfs[nome] = coleta['Close']
@@ -55,6 +56,7 @@ def carregar_dados_mestre():
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
     df['STD20'] = df['Algodao'].rolling(window=20).std()
     
+    # Cálculo das Bandas de Bollinger para detectar lateralização e rompimento
     df['Banda_Sup'] = df['MA20'] + (df['STD20'] * 2)
     df['Banda_Inf'] = df['MA20'] - (df['STD20'] * 2)
     df['Largura_Banda'] = (df['Banda_Sup'] - df['Banda_Inf']) / df['MA20']
@@ -100,18 +102,18 @@ def obter_clima_texas():
         pass
     return "28°C", "Pred. Ensolarado", "12km/h"
 
-# --- 2. ESTILOS VISUAIS (CSS BLINDADO) ---
+# --- 2. ESTILOS VISUAIS (CSS) ---
 st.markdown("""
-<style>
-[data-testid="stSidebar"] { background-color: #161b22; }
-.stMetric { background-color: #1c2128; border-radius: 10px; padding: 10px; border: 1px solid #30363d; }
-.status-card { padding: 10px; border-radius: 10px; text-align: center; margin-bottom: 15px; color: white; font-weight: bold; font-size: 14px; }
-.ia-container { padding: 15px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.1); }
-.trading-box { background-color: #1c2128; padding: 15px; border-radius: 15px; border: 1px solid #30363d; }
-.news-card { background-color: #1c2128; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #58a6ff; }
-div[data-testid="stMetricValue"] { font-size: 22px !important; font-weight: bold !important; }
-</style>
-""", unsafe_allow_html=True)
+    <style>
+    [data-testid="stSidebar"] { background-color: #161b22; }
+    .stMetric { background-color: #1c2128; border-radius: 10px; padding: 10px; border: 1px solid #30363d; }
+    .status-card { padding: 10px; border-radius: 10px; text-align: center; margin-bottom: 15px; color: white; font-weight: bold; font-size: 14px; }
+    .ia-container { padding: 15px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.1); }
+    .trading-box { background-color: #1c2128; padding: 15px; border-radius: 15px; border: 1px solid #30363d; }
+    .news-card { background-color: #1c2128; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #58a6ff; }
+    div[data-testid="stMetricValue"] { font-size: 22px !important; font-weight: bold !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- 3. EXECUÇÃO DO MOTOR MESTRE ---
 try:
@@ -132,7 +134,7 @@ try:
     tendencia_dolar_alta = dolar_hoje > dolar_ontem
     tendencia_petroleo_alta = petroleo_hoje > petroleo_ontem
 
-    # Filtro de Rompimento
+    # Filtro de Rompimento e Detecção de Mercado Lateral
     b_sup = df['Banda_Sup'].iloc[-1]
     b_inf = df['Banda_Inf'].iloc[-1]
     largura_media = df['Largura_Banda'].tail(30).mean()
@@ -289,79 +291,61 @@ try:
     tab_g, tab_f, tab_c, tab_n, tab_b = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar", "📈 Backtest IA"])
 
     with tab_g:
-        st.subheader("⏱️ Histórico Recente e Projeção de Reabertura (IA)")
-        dados_vapt = pd.DataFrame()
-        usando_fallback = False
-        
+        st.subheader("⏱️ Gráfico do Algodão (Tempo Real / 1m)")
         try:
             dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
             if isinstance(dados_vapt.columns, pd.MultiIndex):
                 dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-            if not dados_vapt.empty:
-                dados_vapt = dados_vapt.reset_index()
-                dados_vapt.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in dados_vapt.columns]
-        except:
-            pass
+            dados_vapt = dados_vapt.reset_index()
             
-        if dados_vapt.empty or len(dados_vapt) < 5:
-            try:
-                dados_vapt = yf.download(tickers="CT=F", period="5d", interval="15m", progress=False)
+            if dados_vapt.empty or len(dados_vapt) < 2:
+                dados_vapt = yf.download(tickers="CT=F", period="5d", interval="30m", progress=False)
                 if isinstance(dados_vapt.columns, pd.MultiIndex):
                     dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-                if not dados_vapt.empty:
-                    dados_vapt = dados_vapt.reset_index()
-                    dados_vapt.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in dados_vapt.columns]
-                    usando_fallback = True
-            except:
-                pass
-
-        if not dados_vapt.empty and 'Datetime' in dados_vapt.columns:
-            ultimo_tempo = dados_vapt['Datetime'].iloc[-1]
-            ultimo_preco = dados_vapt['Close'].iloc[-1]
+                dados_vapt = dados_vapt.reset_index()
             
-            fig_minuto = go.Figure()
-            fig_minuto.add_trace(go.Scatter(x=dados_vapt['Datetime'], y=dados_vapt['Close'], mode='lines', line=dict(color='#00CF85', width=2), name='Preço Histórico'))
-            
-            if usando_fallback:
-                st.caption("🌙 Mercado Fechado: Mostrando histórico estendido (15m) + Projeção Preditiva da IA")
-                fator_direcao = 1 if prob >= 0.5 else -1
-                intensidade = abs(prob - 0.5) * 2 * (volat * 1.5)
-                preco_projetado = ultimo_preco + (fator_direcao * intensidade)
-                
-                tempos_futuros = []
-                base_time = ultimo_tempo if isinstance(ultimo_tempo, datetime) else datetime.now()
-                for m in range(15, 61, 15): tempos_futuros.append(base_time + timedelta(minutes=m))
-                
-                x_proj = [ultimo_tempo] + tempos_futuros
-                y_proj = [ultimo_preco] + [ultimo_preco + ((preco_projetado - ultimo_preco) * (k/4)) for k in range(1, 5)]
-                
-                fig_minuto.add_trace(go.Scatter(x=x_proj, y=y_proj, mode='lines+markers', line=dict(color='#ff9f43', width=2, dash='dot'), name='Projeção Reabertura (IA)'))
+            if not dados_vapt.empty:
+                eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
+                fig_minuto = go.Figure(go.Scatter(
+                    x=eixo_x_g, y=dados_vapt['Close'], mode='lines', 
+                    line=dict(color='#00CF85', width=2), name='Preço'
+                ))
+                fig_minuto.update_layout(
+                    template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(type='category', tickangle=0, nticks=4),
+                    yaxis=dict(gridcolor="#30363d")
+                )
+                st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.caption("🟢 Transmitindo dados ao vivo minuto a minuto...")
-
-            fig_minuto.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(type='category', nticks=5), yaxis=dict(gridcolor="#30363d"), legend=dict(orientation="h", y=1.1, x=0))
-            st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
-        else:
-            st.info("⏱️ Sincronizando conexão com a base de dados móvel...")
+                st.info("⏱️ Aguardando abertura del mercado para transmissão minuto a minuto...")
+        except Exception as e:
+            st.caption("Sincronizando feed de cotações de alta frequência...")
 
         st.markdown("---")
         st.subheader("🗓️ Histórico de Médio Prazo com Bandas de Bollinger")
         df_rec = df.tail(45)
+        
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Algodao'], line=dict(color='#58a6ff', width=2), name='Preço'))
         fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['MA20'], line=dict(color='#ff9f43', width=1.5, dash='dash'), name='Média MA20'))
         fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Sup'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Sup'))
         fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Inf'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Inf', fill='tonexty', fillcolor='rgba(255,255,255,0.03)'))
+        
         fig.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     with tab_f:
         st.subheader("🌾 Clima em Tempo Real - Polo Produtor (Lubbock, Texas)")
         temp_tx, cond_tx, vento_tx = obter_clima_texas()
+        
         c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f'<div class="stMetric"><b>TEMPERATURA</b><br>{temp_tx}<br><small>Foco: Estresse Térmico</small></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="stMetric"><b>CONDIÇÃO</b><br>{cond_tx}<br><small>Impacto na Lavoura</small></div>', unsafe_allow_html=True)
-        with c3: st.markdown(f'<div class="stMetric"><b>VENTOS / UMIDADE</b><br>{vento_tx}<br><small>Dispersão e Solo</small></div>', unsafe_allow_html=True)
+        with c1:
+            st.markdown(f'<div class="stMetric"><b>TEMPERATURA</b><br>{temp_tx}<br><small>Foco: Estresse Térmico</small></div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'<div class="stMetric"><b>CONDIÇÃO</b><br>{cond_tx}<br><small>Impacto na Lavoura</small></div>', unsafe_allow_html=True)
+        with c3:
+            st.markdown(f'<div class="stMetric"><b>VENTOS / UMIDADE</b><br>{vento_tx}<br><small>Dispersão e Solo</small></div>', unsafe_allow_html=True)
+            
         st.markdown("---")
         st.subheader("📦 Dados de Estoque Retidos")
         f1, f2 = st.columns(2)
@@ -369,77 +353,45 @@ try:
         f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
 
     with tab_c:
-        st.subheader("🔗 Correlação Macro e Projeção Combinada de Reabertura")
+        st.subheader("🔗 Correlação Macro em Tempo Real (Hoje / 1m)")
         try:
             tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
             dfs_fast = {}
-            usando_fallback_macro = False
-            
             for nome, t in tickers_fast.items():
                 coleta_f = yf.download(tickers=t, period="1d", interval="1m", progress=False)
                 if isinstance(coleta_f.columns, pd.MultiIndex):
                     coleta_f.columns = coleta_f.columns.get_level_values(0)
                 dfs_fast[nome] = coleta_f['Close']
-            df_fast = pd.DataFrame(dfs_fast).ffill().dropna()
-            
+                
+            df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
+
             if not df_fast.empty:
-                df_fast = df_fast.reset_index()
-                df_fast.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in df_fast.columns]
-
-            if df_fast.empty or len(df_fast) < 5:
-                dfs_fast = {}
-                for nome, t in tickers_fast.items():
-                    coleta_f = yf.download(tickers=t, period="5d", interval="15m", progress=False)
-                    if isinstance(coleta_f.columns, pd.MultiIndex):
-                        coleta_f.columns = coleta_f.columns.get_level_values(0)
-                    dfs_fast[nome] = coleta_f['Close']
-                df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
-                df_fast.columns = ['Datetime' if col in ['Date', 'Datetime', 'index'] else col for col in df_fast.columns]
-                usando_fallback_macro = True
-
-            if not df_fast.empty and 'Datetime' in df_fast.columns:
+                eixo_x = df_fast['Datetime'] if 'Datetime' in df_fast.columns else df_fast['Date']
                 df_fast_calc = df_fast[["Algodao", "Petroleo", "Dolar"]]
                 df_fast_norm = (df_fast_calc / df_fast_calc.iloc[0]) * 100
                 
                 fig_c_fast = go.Figure()
                 colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
-                
                 for col in df_fast_norm.columns:
-                    fig_c_fast.add_trace(go.Scatter(x=df_fast['Datetime'], y=df_fast_norm[col], name=f"{col} (Real)", line=dict(color=colors_fast.get(col), width=2)))
-                
-                if usando_fallback_macro:
-                    st.caption("🌙 Fora do horário comercial: Exibindo histórico consolidado (15m) + Projeções de Reabertura Sincronizadas")
-                    ultimo_tempo_m = df_fast['Datetime'].iloc[-1]
-                    base_time_m = ultimo_tempo_m if isinstance(ultimo_tempo_m, datetime) else datetime.now()
-                    
-                    tempos_futuros_m = [base_time_m + timedelta(minutes=m) for m in range(15, 61, 15)]
-                    x_proj_m = [ultimo_tempo_m] + tempos_futuros_m
-                    
-                    fator_alg = 1 if prob >= 0.5 else -1
-                    fator_pet = 1 if prob >= 0.48 else -1
-                    fator_dol = -1 if prob >= 0.5 else 1
-                    
-                    for col, factor, cor in [("Algodao", fator_alg, "#00CF85"), ("Petroleo", fator_pet, "#ff9f43"), ("Dolar", fator_dol, "#54a0ff")]:
-                        u_val = df_fast_norm[col].iloc[-1]
-                        v_esperada = abs(prob - 0.5) * 3.5 * factor
-                        val_projetado = u_val + v_esperada
-                        y_proj_m = [u_val + ((val_projetado - u_val) * (k/4)) for k in range(0, 5)]
-                        
-                        fig_c_fast.add_trace(go.Scatter(x=x_proj_m, y=y_proj_m, mode='lines', line=dict(color=cor, width=2, dash='dot'), name=f"{col} (Projeção IA)"))
-                else:
-                    st.caption("🟢 Monitorando correlações de alta frequência ao vivo...")
-
-                fig_c_fast.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(type='category', nticks=5), legend=dict(orientation="h", y=1.1, x=0))
+                    fig_c_fast.add_trace(go.Scatter(
+                        x=eixo_x, y=df_fast_norm[col], 
+                        name=col, line=dict(color=colors_fast.get(col), width=2)
+                    ))
+                fig_c_fast.update_layout(
+                    template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(type='category', tickangle=0, nticks=4), legend=dict(orientation="h", y=1.1, x=0)
+                )
                 st.plotly_chart(fig_c_fast, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.info("🔗 Aguardando sincronização com as bolsas globais...")
-        except:
-            st.caption("Sincronizando fluxo macro preditivo...")
+                st.info("🔗 Aguardando abertura das bolsas globais para cálculo de correlação...")
+        except Exception as e:
+            st.caption("Sincronizando fluxo macro de alta frequência...")
 
         st.markdown("---")
         st.subheader("🔗 Correlação Macro Histórica (2 Anos)")
         fig_c = go.Figure()
-        for col in ["Algodao", "Petroleo", "Dolar"]: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
+        for col in ["Algodao", "Petroleo", "Dolar"]: 
+            fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
         fig_c.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
         st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
 
@@ -458,7 +410,7 @@ try:
         
         capital_inicial = 100000.0
         capital = capital_inicial
-        estado_posicao = None
+        posicao = None
         preco_entrada = 0.0
         historico_capital = []
         trades_executados = []
@@ -467,25 +419,25 @@ try:
             preco_hist = df_back['Algodao'].iloc[i]
             p_ia = df_back['Prob_IA'].iloc[i]
             
-            if estado_posicao == "LONG":
+            if posicao == "LONG":
                 if p_ia <= 0.50:
                     lucro_trade = (preco_hist - preco_entrada) * 3000  
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
-                    estado_posicao = None
-            elif estado_posicao == "SHORT":
+                    posicao = None
+            elif posicao == "SHORT":
                 if p_ia >= 0.50:
                     lucro_trade = (preco_entrada - preco_hist) * 3000
                     capital += lucro_trade
                     trades_executados.append(lucro_trade)
-                    estado_posicao = None
+                    posicao = None
             
-            if estado_posicao is None:
+            if posicao is None:
                 if p_ia > 0.60:    
-                    estado_posicao = "LONG"
+                    posicao = "LONG"
                     preco_entrada = preco_hist
                 elif p_ia < 0.40:
-                    estado_posicao = "SHORT"
+                    posicao = "SHORT"
                     preco_entrada = preco_hist
                     
             historico_capital.append(capital)
