@@ -454,5 +454,4 @@ try:
         
         fig_back = go.Figure(go.Scatter(x=df_back.index, y=historico_capital, line=dict(color='#00CF85', width=2.5)))
         fig_back.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_back, use_container_width=True, config={'displayModeBar': False})
-
+        st
