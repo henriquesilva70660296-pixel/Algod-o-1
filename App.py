@@ -1,4 +1,4 @@
-import streamlit as st
+
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -456,5 +456,3 @@ try:
         fig_back.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig_back, use_container_width=True, config={'displayModeBar': False})
 
-except Exception as e:
-    st.error(f"Sincronizando motores: {e}")
