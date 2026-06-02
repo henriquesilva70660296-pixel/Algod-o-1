@@ -274,7 +274,8 @@ with tab_g:
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Sup'], line=dict(color='rgba(255,255,255,0.15)', width=1), name='Banda Sup (Teto)'))
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Inf'], line=dict(color='rgba(255,255,255,0.15)', width=1), name='Banda Inf (Chão)', fill='tonexty', fillcolor='rgba(255,255,255,0.02)'))
     
-    fig.update_layout(template="plotly_dark", height=280, margin=dict(l=10, r=10, t=10 winter=10), legend=dict(orientation="h", y=1.1, x=0))
+    fig.update_layout(template="plotly_dark", height=280, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
+
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 with tab_f:
