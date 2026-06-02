@@ -39,10 +39,10 @@ def init_db():
 
 init_db()
 
+# MOTOR 1: DADOS DIÁRIOS (MANTIDO INTACTO)
 @st.cache_data(ttl=40)
-def carregar_dados_mestre():
+def carregar_dados_mestre_diario():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-    
     dfs = {}
     for nome, t in tickers.items():
         coleta = yf.Ticker(t).history(period="2y")
@@ -51,10 +51,8 @@ def carregar_dados_mestre():
         dfs[nome] = coleta['Close']
         
     df = pd.DataFrame(dfs).ffill().dropna()
-    
     df['MA20'] = df['Algodao'].rolling(window=20).mean()
     df['STD20'] = df['Algodao'].rolling(window=20).std()
-    
     df['Banda_Sup'] = df['MA20'] + (df['STD20'] * 2)
     df['Banda_Inf'] = df['MA20'] - (df['STD20'] * 2)
     df['Largura_Banda'] = (df['Banda_Sup'] - df['Banda_Inf']) / df['MA20']
@@ -77,7 +75,40 @@ def carregar_dados_mestre():
     modelo = RandomForestClassifier(n_estimators=150, max_depth=8, random_state=42)
     modelo.fit(df_treino[features], df_treino['Target'])
     
-    return modelo, df, df_norm, features, ponto_divisao
+    return modelo, df, df_norm, features
+
+# MOTOR 2: NOVO MOTOR EXCLUSIVO PARA SINAIS DE 1 HORA
+@st.cache_data(ttl=45)
+def carregar_dados_mestre_1h():
+    tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
+    dfs = {}
+    for nome, t in tickers.items():
+        coleta = yf.Ticker(t).history(period="730d", interval="1h")
+        if isinstance(coleta.columns, pd.MultiIndex):
+            coleta.columns = coleta.columns.get_level_values(0)
+        dfs[nome] = coleta['Close']
+        
+    df = pd.DataFrame(dfs).ffill().dropna()
+    df['MA20'] = df['Algodao'].rolling(window=20).mean()
+    df['STD20'] = df['Algodao'].rolling(window=20).std()
+    
+    delta = df['Algodao'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-9)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    df['Target'] = (df['Algodao'].shift(-1) > (df['Algodao'] * 1.0002)).astype(int)
+    df.dropna(inplace=True)
+    
+    features = ['Algodao', 'Petroleo', 'Dolar', 'MA20', 'RSI']
+    ponto_divisao = int(len(df) * 0.85)
+    df_treino = df.iloc[:ponto_divisao]
+    
+    modelo_1h = RandomForestClassifier(n_estimators=180, max_depth=10, random_state=42)
+    modelo_1h.fit(df_treino[features], df_treino['Target'])
+    
+    return modelo_1h, df, features
 
 def get_market_status():
     tz = pytz.timezone('America/Sao_Paulo')
@@ -106,16 +137,20 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #161b22; }
     .stMetric { background-color: #1c2128; border-radius: 10px; padding: 10px; border: 1px solid #30363d; }
     .status-card { padding: 10px; border-radius: 10px; text-align: center; margin-bottom: 15px; color: white; font-weight: bold; font-size: 14px; }
-    .ia-container { padding: 15px; border-radius: 15px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.1); }
+    .ia-container { padding: 12px; border-radius: 12px; text-align: center; border: 2px solid; margin-bottom: 10px; background-color: rgba(0,0,0,0.1); }
     .trading-box { background-color: #1c2128; padding: 15px; border-radius: 15px; border: 1px solid #30363d; }
     .news-card { background-color: #1c2128; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #58a6ff; }
     div[data-testid="stMetricValue"] { font-size: 22px !important; font-weight: bold !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. EXECUÇÃO DO MOTOR MESTRE ---
-modelo, df, df_norm, features, ponto_divisao = carregar_dados_mestre()
-prob = modelo.predict_proba(df[features].tail(1))[0][1]
+# --- 3. EXECUÇÃO DOS MOTORES ---
+modelo_diario, df, df_norm, features_diario = carregar_dados_mestre_diario()
+modelo_1h, df_1h, features_1h = carregar_dados_mestre_1h()
+
+prob_diaria = modelo_diario.predict_proba(df[features_diario].tail(1))[0][1]
+prob_1h = modelo_1h.predict_proba(df_1h[features_1h].tail(1))[0][1]
+
 preco_atual = df['Algodao'].iloc[-1]
 volat = df['Volatilidade'].iloc[-1]
 
@@ -123,7 +158,7 @@ conn = sqlite3.connect('cotton_intel.db')
 saldo_atual = conn.execute('SELECT saldo FROM conta WHERE id = 1').fetchone()[0]
 conn.close()
 
-# Tendências Macro
+# Tendências Macro (Diárias)
 dolar_hoje = df['Dolar'].iloc[-1]
 dolar_ontem = df['Dolar'].iloc[-2]
 petroleo_hoje = df['Petroleo'].iloc[-1]
@@ -131,7 +166,7 @@ petroleo_ontem = df['Petroleo'].iloc[-2]
 tendencia_dolar_alta = dolar_hoje > dolar_ontem
 tendencia_petroleo_alta = petroleo_hoje > petroleo_ontem
 
-# Filtro de Rompimento e Detecção de Mercado Lateral
+# Canais Diários (Mantidos idênticos)
 b_sup = df['Banda_Sup'].iloc[-1]
 b_inf = df['Banda_Inf'].iloc[-1]
 largura_media = df['Largura_Banda'].tail(30).mean()
@@ -141,13 +176,13 @@ mercado_lateral = largura_atual < (largura_media * 0.85)
 rompendo_topo = preco_atual >= (b_sup * 0.998)
 rompendo_fundo = preco_atual <= (b_inf * 1.002)
 
-# SIDEBAR TÉCNICA
+# SIDEBAR TÉCNICA (MANTIDA DIÁRIA)
 with st.sidebar:
     st.header("🛡️ Gestão e Técnica")
     st.metric("Saldo em Conta", f"${saldo_atual:,.2f}")
     
     st.markdown("---")
-    st.subheader("📊 Dados Técnicos (0-100)")
+    st.subheader("📊 Dados Técnicos Diários (0-100)")
     
     rsi_val = df['RSI'].iloc[-1]
     volat_val = df['Volatilidade'].iloc[-1]
@@ -206,30 +241,41 @@ st.markdown("---")
 col_ia, col_trade = st.columns([1.5, 1])
 
 with col_ia:
-    if mercado_lateral and (0.35 <= prob <= 0.65):
-        cor_ia, txt_ia = "#fccf03", "MERCADO LATERAL"
-    elif prob > 0.65:
-        if tendencia_dolar_alta:
-            cor_ia, txt_ia = "#fccf03", "COMPRA RISCO (DXY ▲)"
-        elif rompendo_topo:
-            cor_ia, txt_ia = "#00CF85", "⚡ BREAKOUT ALTA ⚡"
-        else:
-            cor_ia, txt_ia = "#00CF85", "COMPRA FORTE"
-    elif prob < 0.35:
-        if tendencia_petroleo_alta:
-            cor_ia, txt_ia = "#fccf03", "VENDA RISCO (PETRÓLEO ▲)"
-        elif rompendo_fundo:
-            cor_ia, txt_ia = "#ff4b4b", "⚡ BREAKOUT BAIXA ⚡"
-        else:
-            cor_ia, txt_ia = "#ff4b4b", "VENDA FORTE"
+    st.subheader("🤖 Sinais de Inteligência Artificial")
+    
+    # --- LOGICA SINAL DIÁRIO (MANTIDO EXATAMENTE IGUAL) ---
+    if mercado_lateral and (0.35 <= prob_diaria <= 0.65):
+        cor_dia, txt_dia = "#fccf03", "MERCADO LATERAL"
+    elif prob_diaria > 0.65:
+        if tendencia_dolar_alta: cor_dia, txt_dia = "#fccf03", "COMPRA RISCO (DXY ▲)"
+        elif rompendo_topo: cor_dia, txt_dia = "#00CF85", "⚡ BREAKOUT ALTA ⚡"
+        else: cor_dia, txt_dia = "#00CF85", "COMPRA FORTE"
+    elif prob_diaria < 0.35:
+        if tendencia_petroleo_alta: cor_dia, txt_dia = "#fccf03", "VENDA RISCO (PETRÓLEO ▲)"
+        elif rompendo_fundo: cor_dia, txt_dia = "#ff4b4b", "⚡ BREAKOUT BAIXA ⚡"
+        else: cor_dia, txt_dia = "#ff4b4b", "VENDA FORTE"
     else:
-        cor_ia, txt_ia = "#fccf03", "AGUARDAR"
+        cor_dia, txt_dia = "#fccf03", "AGUARDAR"
 
     st.markdown(f"""
-        <div class="ia-container" style="border-color: {cor_ia}; color: {cor_ia};">
-            <small style="color: white; opacity: 0.6;">CONFIANÇA DA IA MASTER</small><br>
-            <span style="font-size: 50px; font-weight: 900;">{prob*100:.1f}%</span><br>
-            <b style="font-size: 20px;">{txt_ia}</b>
+        <div class="ia-container" style="border-color: {cor_dia}; color: {cor_dia};">
+            <small style="color: white; opacity: 0.6;">SINAL CANAL DIÁRIO (SWING)</small><br>
+            <span style="font-size: 28px; font-weight: 800;">{prob_diaria*100:.1f}%</span> - <b>{txt_dia}</b>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # --- NOVA LÓGICA: SINAL DO GRÁFICO DE 1 HORA ---
+    if 0.38 <= prob_1h <= 0.62:
+        cor_h1, txt_h1 = "#fccf03", "LATERAL / INTRADAY"
+    elif prob_1h > 0.62:
+        cor_h1, txt_h1 = "#00CF85", "COMPRA RAPIDA (1H)"
+    else:
+        cor_h1, txt_h1 = "#ff4b4b", "VENDA RAPIDA (1H)"
+
+    st.markdown(f"""
+        <div class="ia-container" style="border-color: {cor_h1}; color: {cor_h1}; margin-top: 15px;">
+            <small style="color: white; opacity: 0.6;">SINAL ESPECÍFICO GRÁFICO 1 HORA (INTRADAY)</small><br>
+            <span style="font-size: 28px; font-weight: 800;">{prob_1h*100:.1f}%</span> - <b>{txt_h1}</b>
         </div>
         """, unsafe_allow_html=True)
 
@@ -268,7 +314,7 @@ with col_trade:
             c = sqlite3.connect('cotton_intel.db')
             c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
             c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
-                     (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
+                     (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob_diaria, st.session_state.sl, st.session_state.tp))
             c.commit(); c.close()
             del st.session_state.ent
             st.rerun()
@@ -278,14 +324,14 @@ with col_trade:
             c = sqlite3.connect('cotton_intel.db')
             c.execute('UPDATE conta SET saldo = saldo + ?', (lucro_v,))
             c.execute('INSERT INTO trades (data, tipo, entrada, saida, lucro, confianca, stop_loss, take_profit) VALUES (?,?,?,?,?,?,?,?)',
-                     (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob, st.session_state.sl, st.session_state.tp))
+                     (datetime.now().strftime("%d/%m %H:%M"), st.session_state.tipo, st.session_state.ent, preco_atual, lucro_v, prob_diaria, st.session_state.sl, st.session_state.tp))
             c.commit(); c.close()
             del st.session_state.ent
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ABAS OPERACIONAIS
-tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráfico", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
+tab_g, tab_f, tab_c, tab_n = st.tabs(["📊 Gráficos", "📦 Fundamentos", "🔗 Macro", "📰 Radar"])
 
 with tab_g:
     st.subheader("⏱️ Gráfico do Algodão (Tempo Real / 1m)")
@@ -295,12 +341,6 @@ with tab_g:
             dados_vapt.columns = dados_vapt.columns.get_level_values(0)
         dados_vapt = dados_vapt.reset_index()
         
-        if dados_vapt.empty or len(dados_vapt) < 2:
-            dados_vapt = yf.download(tickers="CT=F", period="5d", interval="30m", progress=False)
-            if isinstance(dados_vapt.columns, pd.MultiIndex):
-                dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-            dados_vapt = dados_vapt.reset_index()
-        
         if not dados_vapt.empty:
             eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
             fig_minuto = go.Figure(go.Scatter(
@@ -308,22 +348,19 @@ with tab_g:
                 line=dict(color='#00CF85', width=2), name='Preço'
             ))
             fig_minuto.update_layout(
-                template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10),
-                xaxis=dict(type='category', tickangle=0, nticks=4),
-                yaxis=dict(gridcolor="#30363d")
+                template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10),
+                xaxis=dict(type='category', tickangle=0, nticks=4), yaxis=dict(gridcolor="#30363d")
             )
             st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
-        else:
-            st.info("⏱️ Aguardando abertura do mercado para transmissão minuto a minuto...")
     except:
-        st.caption("Sincronizando feed de cotações de alta frequência...")
+        st.caption("Sincronizando feed minuto a minuto...")
 
     st.markdown("---")
-    st.subheader("🗓️ Histórico de Médio Prazo com Bandas de Bollinger")
+    st.subheader("🗓️ Histórico Diário com Bandas de Bollinger (Seus Canais)")
     df_rec = df.tail(45)
     
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Algodao'], line=dict(color='#58a6ff', width=2), name='Preço'))
+    fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Algodao'], line=dict(color='#58a6ff', width=2), name='Preço Diário'))
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['MA20'], line=dict(color='#ff9f43', width=1.5, dash='dash'), name='Média MA20'))
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Sup'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Sup'))
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Inf'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='Banda Inf', fill='tonexty', fillcolor='rgba(255,255,255,0.03)'))
@@ -336,59 +373,14 @@ with tab_f:
     temp_tx, cond_tx, vento_tx = obter_clima_texas()
     
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f'<div class="stMetric"><b>TEMPERATURA</b><br>{temp_tx}<br><small>Foco: Estresse Térmico</small></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="stMetric"><b>CONDIÇÃO</b><br>{cond_tx}<br><small>Impacto na Lavoura</small></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown(f'<div class="stMetric"><b>VENTOS / UMIDADE</b><br>{vento_tx}<br><small>Dispersão e Solo</small></div>', unsafe_allow_html=True)
-        
-    st.markdown("---")
-    st.subheader("📦 Dados de Estoque Retidos")
-    f1, f2 = st.columns(2)
-    f1.markdown('<div class="stMetric"><b>ESTOQUE USDA</b><br>76.4M Fardos<br><small>Fonte: WASDE</small></div>', unsafe_allow_html=True)
-    f2.markdown('<div class="stMetric"><b>VOLATILIDADE</b><br>Alta (HVT)<br><small>Foco: Texas/EUA</small></div>', unsafe_allow_html=True)
+    with c1: st.markdown(f'<div class="stMetric"><b>TEMPERATURA</b><br>{temp_tx}<br><small>Estresse Térmico</small></div>', unsafe_allow_html=True)
+    with c2: st.markdown(f'<div class="stMetric"><b>CONDIÇÃO</b><br>{cond_tx}<br><small>Impacto na Lavoura</small></div>', unsafe_allow_html=True)
+    with c3: st.markdown(f'<div class="stMetric"><b>VENTOS</b><br>{vento_tx}<br><small>Dispersão</small></div>', unsafe_allow_html=True)
 
 with tab_c:
-    st.subheader("🔗 Correlação Macro em Tempo Real (Hoje / 1m)")
-    try:
-        tickers_fast = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
-        dfs_fast = {}
-        for nome, t in tickers_fast.items():
-            coleta_f = yf.download(tickers=t, period="1d", interval="1m", progress=False)
-            if isinstance(coleta_f.columns, pd.MultiIndex):
-                coleta_f.columns = coleta_f.columns.get_level_values(0)
-            dfs_fast[nome] = coleta_f['Close']
-            
-        df_fast = pd.DataFrame(dfs_fast).ffill().dropna().reset_index()
-
-        if not df_fast.empty:
-            eixo_x = df_fast['Datetime'] if 'Datetime' in df_fast.columns else df_fast['Date']
-            df_fast_calc = df_fast[["Algodao", "Petroleo", "Dolar"]]
-            df_fast_norm = (df_fast_calc / df_fast_calc.iloc[0]) * 100
-            
-            fig_c_fast = go.Figure()
-            colors_fast = {"Algodao": "#00CF85", "Petroleo": "#ff9f43", "Dolar": "#54a0ff"}
-            for col in df_fast_norm.columns:
-                fig_c_fast.add_trace(go.Scatter(
-                    x=eixo_x, y=df_fast_norm[col], 
-                    name=col, line=dict(color=colors_fast.get(col), width=2)
-                ))
-            fig_c_fast.update_layout(
-                template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10),
-                xaxis=dict(type='category', tickangle=0, nticks=4), legend=dict(orientation="h", y=1.1, x=0)
-            )
-            st.plotly_chart(fig_c_fast, use_container_width=True, config={'displayModeBar': False})
-        else:
-            st.info("🔗 Aguardando abertura das bolsas globais para cálculo de correlação...")
-    except:
-        st.caption("Sincronizando fluxo macro de alta frequência...")
-
-    st.markdown("---")
     st.subheader("🔗 Correlação Macro Histórica (2 Anos)")
     fig_c = go.Figure()
-    for col in ["Algodao", "Petroleo", "Dolar"]: 
-        fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
+    for col in ["Algodao", "Petroleo", "Dolar"]: fig_c.add_trace(go.Scatter(y=df_norm[col], name=col))
     fig_c.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
     st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
 
@@ -399,5 +391,4 @@ with tab_n:
         for n in feed.entries[:4]:
             try: st.markdown(f'<div class="news-card"><small>{n.published}</small><br><b>{translator.translate(n.title)}</b></div>', unsafe_allow_html=True)
             except: st.write(n.title)
-    except:
-        st.write("Radar de notícias em atualização...")
+    except: st.write("Radar em atualização...")
