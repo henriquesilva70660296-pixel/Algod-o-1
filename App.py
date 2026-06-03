@@ -197,31 +197,7 @@ m3.metric("DÓLAR GLOBAL (DXY)", f"{dolar_hoje:.2f}")
 
 st.markdown("---")
 
-# GRÁFICO EM TEMPO REAL RETORNADO PARA O TOPO CENTRAL (Como solicitado)
-st.subheader("📈 Gráfico de Tendência em Tempo Real (1 Minuto)")
-try:
-    dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
-    if isinstance(dados_vapt.columns, pd.MultiIndex):
-        dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-    dados_vapt = dados_vapt.reset_index()
-    
-    if not dados_vapt.empty:
-        eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
-        fig_minuto = go.Figure(go.Scatter(
-            x=eixo_x_g, y=dados_vapt['Close'], mode='lines', 
-            line=dict(color='#00CF85', width=2), name='Preço Instantâneo'
-        ))
-        fig_minuto.update_layout(
-            template="plotly_dark", height=220, margin=dict(l=10, r=10, t=10, b=10),
-            xaxis=dict(type='category', showticklabels=True, nticks=6), yaxis=dict(gridcolor="#30363d")
-        )
-        st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
-except:
-    st.caption("Aguardando transmissão estável de velas de 1 minuto...")
-
-st.markdown("---")
-
-# Layout de Sinais de Inteligência Artificial
+# Layout de Sinais de Inteligência Artificial (Ocupando o topo com destaque)
 col_dia_box, col_h1_box = st.columns(2)
 
 with col_dia_box:
@@ -262,10 +238,35 @@ with col_h1_box:
 st.markdown("---")
 
 # PAINEL DE ABAS REORGANIZADO
-tab_g, tab_f, tab_fut, tab_n = st.tabs(["📊 Canais Gráficos (Diário)", "📦 Fundamentos Atuais", "🔮 Sinais Futuros (Previsões)", "📰 Radar de Notícias"])
+tab_g, tab_f, tab_fut, tab_n = st.tabs(["📊 Canais Gráficos", "📦 Fundamentos Atuais", "🔮 Sinais Futuros (Previsões)", "📰 Radar de Notícias"])
 
 with tab_g:
-    st.subheader("🗓️ Canais Históricos Diários (Média MA20 e Bandas)")
+    # 1. GRÁFICO EM TEMPO REAL (MINUTO A MINUTO) REALOCADO DENTRO DA ABA
+    st.subheader("⏱️ Transmissão em Tempo Real (Velocidade 1 Minuto)")
+    try:
+        dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
+        if isinstance(dados_vapt.columns, pd.MultiIndex):
+            dados_vapt.columns = dados_vapt.columns.get_level_values(0)
+        dados_vapt = dados_vapt.reset_index()
+        
+        if not dados_vapt.empty:
+            eixo_x_g = dados_vapt['Datetime'] if 'Datetime' in dados_vapt.columns else dados_vapt['Date']
+            fig_minuto = go.Figure(go.Scatter(
+                x=eixo_x_g, y=dados_vapt['Close'], mode='lines', 
+                line=dict(color='#00CF85', width=2), name='Preço Instantâneo'
+            ))
+            fig_minuto.update_layout(
+                template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10),
+                xaxis=dict(type='category', showticklabels=True, nticks=6), yaxis=dict(gridcolor="#30363d")
+            )
+            st.plotly_chart(fig_minuto, use_container_width=True, config={'displayModeBar': False})
+    except:
+        st.caption("Aguardando transmissão estável de velas de 1 minuto...")
+
+    st.markdown("---")
+
+    # 2. GRÁFICO HISTÓRICO COM AS BANDAS DIÁRIAS
+    st.subheader("🗓️ Canais Históricos Diários (Média MA20 e Bandas de Bollinger)")
     df_rec = df.tail(45)
     
     fig = go.Figure()
@@ -274,8 +275,7 @@ with tab_g:
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Sup'], line=dict(color='rgba(255,255,255,0.15)', width=1), name='Banda Sup (Teto)'))
     fig.add_trace(go.Scatter(x=df_rec.index, y=df_rec['Banda_Inf'], line=dict(color='rgba(255,255,255,0.15)', width=1), name='Banda Inf (Chão)', fill='tonexty', fillcolor='rgba(255,255,255,0.02)'))
     
-    fig.update_layout(template="plotly_dark", height=280, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
-
+    fig.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.1, x=0))
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 with tab_f:
@@ -289,30 +289,22 @@ with tab_f:
 with tab_fut:
     st.subheader("🔮 Projeções Fundamentais e Sinais Futuros (Confluência Operacional)")
     
-    # --- NOVO SISTEMA DE CÁLCULO DE PROJEÇÃO DE PORCENTAGEM FUTURA ---
-    # Valores base padrão
+    # --- SISTEMA DE CÁLCULO DE PROJEÇÃO DE PORCENTAGEM FUTURA ---
     score_futuro = 50.0 
+    score_futuro += 15.0 # Peso clima
     
-    # 1. Input do Clima (Massa Seca = Alta) -> Soma +15%
-    score_futuro += 15.0
-    
-    # 2. Input de Sazonalidade Automática baseada no mês corrente
     mes_atual = datetime.now().month
-    sazonalidade_texto = "Período neutro de transição cambial e física."
+    sazonalidade_texto = "Período neutro de transição."
     if mes_atual in [4, 5, 6, 7]:
-        sazonalidade_texto = "📈 Plantio nos EUA. Histórico de alta por prêmio de risco climático (64% de alta sazonal)."
-        score_futuro += 14.0 # Soma +14% por viés sazonal histórico de alta
+        sazonalidade_texto = "📈 Plantio nos EUA. Histórico de alta por prêmio de risco climático (64% de alta)."
+        score_futuro += 14.0 
     elif mes_atual in [9, 10, 11]:
-        sazonalidade_texto = "📉 Entrada da Colheita física. Histórico de aumento de oferta e pressão de baixa na Bolsa."
-        score_futuro -= 15.0 # Subtrai por viés de baixa
+        sazonalidade_texto = "📉 Entrada da Colheita física. Histórico de aumento de oferta."
+        score_futuro -= 15.0 
         
-    # 3. Input USDA (Demanda Têxtil Forte) -> Soma +10%
-    score_futuro += 10.0
-    
-    # Garantir limites matemáticos entre 0 e 100
+    score_futuro += 10.0 # Peso demanda USDA
     score_futuro = max(5.0, min(95.0, score_futuro))
     
-    # Determina a direção textual do bloco futuro
     if score_futuro >= 55.0:
         cor_fut, txt_fut = "#00CF85", f"PROJEÇÃO DE ALTA FUTURA: {score_futuro:.1f}%"
     elif score_futuro <= 45.0:
@@ -320,7 +312,6 @@ with tab_fut:
     else:
         cor_fut, txt_fut = "#fccf03", f"PROJEÇÃO NEUTRA: {score_futuro:.1f}%"
 
-    # CARD PRINCIPAL COM A PORCENTAGEM FUTURA CALCULADA
     st.markdown(f"""
         <div class="future-header" style="background-color: rgba(0,0,0,0.3); border-color: {cor_fut}; color: {cor_fut};">
             🔮 RADAR DE PROJEÇÃO MACRO: {txt_fut}
