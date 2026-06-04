@@ -10,12 +10,13 @@ import feedparser
 from deep_translator import GoogleTranslator
 import requests
 
-# --- 1. CONFIGURAÇÃO E ESTABILIDADE ---
-st_autorefresh(interval=45 * 1000, key="datarefresh")
+# --- 1. CONFIGURAÇÃO E VELOCIDADE MÁXIMA ---
+# Atualizado para 30 segundos (30 * 1000 milissegundos)
+st_autorefresh(interval=30 * 1000, key="datarefresh")
 st.set_page_config(page_title="Cotton Intelligence Pro", layout="wide")
 
-# MOTOR 1: DADOS DIÁRIOS (CANAIS DIÁRIOS)
-@st.cache_data(ttl=40)
+# MOTOR 1: DADOS DIÁRIOS (CANAIS DIÁRIOS) - Calibrado para atualizar a cada 30s
+@st.cache_data(ttl=30)
 def carregar_dados_mestre_diario():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
     dfs = {}
@@ -52,8 +53,8 @@ def carregar_dados_mestre_diario():
     
     return modelo, df, df_norm, features
 
-# MOTOR 2: SINAIS DE 1 HORA (INTRADAY)
-@st.cache_data(ttl=45)
+# MOTOR 2: SINAIS DE 1 HORA (INTRADAY) - Sincronizado para 30s
+@st.cache_data(ttl=30)
 def carregar_dados_mestre_1h():
     tickers = {"Algodao": "CT=F", "Petroleo": "CL=F", "Dolar": "DX-Y.NYB"}
     dfs = {}
@@ -335,7 +336,6 @@ with tab_f:
 with tab_fut:
     st.subheader("🔮 Projeções Fundamentais e Sinais Futuros (Confluência Operacional)")
     
-    # --- SISTEMA DE CÁLCULO DE PROJEÇÃO DE PORCENTAGEM FUTURA ---
     score_futuro = 50.0 
     score_futuro += 15.0 
     
@@ -371,7 +371,7 @@ with tab_fut:
         <div class="future-box">
             <h4 style='color:#58a6ff; margin:0;'>🌦️ Previsão Climática (7 Dias)</h4>
             <p style='margin-top:10px; font-size:14px;'><b>Região:</b> Texas Panhandle<br>
-            <b>Tendência:</b> Massa de ar seco avançando nas próximas 168 horas.<br>
+            <b>Tendência:</b> Massa de ar seco avançando nas próximas 168 hours.<br>
             <span style='color:#00CF85;'>➔ Peso no Modelo: +15% de Viés de Alta</span></p>
         </div>
         """, unsafe_allow_html=True)
