@@ -145,18 +145,24 @@ mercado_lateral = largura_atual < (largura_media * 0.85)
 rompendo_topo = preco_atual >= (b_sup * 0.998)
 rompendo_fundo = preco_atual <= (b_inf * 1.002)
 
-# --- DATA MOTOR EXTRA: 1 MINUTO PARA SCALPING AGRESSIVO ---
+# --- DATA MOTOR EXTRA: 1 MINUTO PARA SCALPING AGRESSIVO (CALIBRADO) ---
 dados_vapt = pd.DataFrame()
 prob_scalper = 50.0
+status_sincronizacao = "⚪ Aguardando Inicialização"
+cor_sincronizacao = "#777777"
+
 try:
-    dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False)
+    dados_vapt = yf.download(tickers="CT=F", period="1d", interval="1m", progress=False, timeout=10)
+    
     if isinstance(dados_vapt.columns, pd.MultiIndex):
         dados_vapt.columns = dados_vapt.columns.get_level_values(0)
-    dados_vapt = dados_vapt.reset_index()
     
     if not dados_vapt.empty:
+        dados_vapt = dados_vapt.reset_index()
+        
         # Média Exponencial Rápida (EMA 9) de 1 minuto
         dados_vapt['EMA9'] = dados_vapt['Close'].ewm(span=9, adjust=False).mean()
+        
         # RSI Ultra Rápido (5 Períodos)
         d_v = dados_vapt['Close'].diff()
         g_v = (d_v.where(d_v > 0, 0)).rolling(window=5).mean()
@@ -164,7 +170,7 @@ try:
         rs_v = g_v / (l_v + 1e-9)
         dados_vapt['RSI5'] = 100 - (100 / (1 + rs_v))
         
-        # Leitura instantânea
+        # Leitura instantânea dos últimos valores válidos
         ultimo_preco = dados_vapt['Close'].iloc[-1]
         ultima_ema = dados_vapt['EMA9'].iloc[-1]
         ultimo_rsi5 = dados_vapt['RSI5'].iloc[-1]
@@ -178,12 +184,21 @@ try:
         else: score_sc -= 20.0
         
         prob_scalper = max(5.0, min(95.0, score_sc))
-except:
-    pass
+        status_sincronizacao = f"⚡ Sincronizado às {datetime.now().strftime('%H:%M:%S')}"
+        cor_sincronizacao = "#00CF85"
+    else:
+        status_sincronizacao = "⚠️ Sem dados novos (Fora de Horário)"
+        cor_sincronizacao = "#ff9f43"
+except Exception as e:
+    status_sincronizacao = "🔌 Erro de Conexão - Mantendo Último Preço"
+    cor_sincronizacao = "#ff4b4b"
+    prob_scalper = 50.0
 
 # SIDEBAR TÉCNICA
 with st.sidebar:
     st.header("📊 Filtros Rápidos")
+    # Indicador visual de atualização contínua no topo do menu lateral
+    st.markdown(f"<div style='text-align: center; color: {cor_sincronizacao}; font-size: 12px; font-weight: bold; margin-bottom:15px;'>{status_sincronizacao}</div>", unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Osciladores do Dia (0-100)")
     
@@ -334,21 +349,45 @@ with tab_f:
     c3.markdown(f'<div class="stMetric"><b>VELOCIDADE DO VENTO</b><br>{vento_tx}<br><small>Erosão do Solo</small></div>', unsafe_allow_html=True)
 
 with tab_fut:
-    st.subheader("🔮 Projeções Fundamentais e Sinais Futuros (Confluência Operacional)")
+    st.subheader("🔮 Projeções Fundamentais e Sinais Futuros (Confluência Operacional Real)")
     
+    # 1. CAPTURA DOS DADOS REAIS DO CLIMA DE LUBBOCK
+    temp_tx, cond_tx, vento_tx = obter_clima_texas_completo()
+    
+    # Limpeza do texto da temperatura para extrair o número decimal
+    try:
+        temp_numerica = float(''.join(c for c in temp_tx if c.isdigit() or c == '-'))
+    except:
+        temp_numerica = 28.0 # Fallback caso a API falhe
+    
+    # 2. MOTOR DE DECISÃO DA IA PARA O CLIMA (Automação Real)
+    peso_clima = 0.0
+    status_clima_futuro = ""
+    
+    if temp_numerica >= 35.0:
+        status_clima_futuro = f"🔥 ALERTA DE CALOR EXTREMO ({temp_tx}): Risco de quebra de safra no Texas por estresse térmico."
+        peso_clima = 20.0  # Forte viés de ALTA no preço (falta de oferta futura)
+    elif temp_numerica <= 15.0:
+        status_clima_futuro = f"❄️ ALERTA DE FRIO EXCESSIVO ({temp_tx}): Risco de geada tardia afetando o desenvolvimento inicial."
+        peso_clima = 15.0  # Viés de ALTA no preço
+    else:
+        status_clima_futuro = f"☀️ CLIMA IDEAL ({temp_tx}): Condições na região de Lubbock favoráveis para o desenvolvimento da pluma."
+        peso_clima = -5.0   # Viés de BAIXA ou estabilização de preços (boa safra à vista)
+
+    # 3. CÁLCULO DINÂMICO DO SCORE FUTURO MACRO
     score_futuro = 50.0 
-    score_futuro += 15.0 
+    score_futuro += peso_clima  # Ingestão direta do resultado climático automatizado
     
     mes_atual = datetime.now().month
-    sazonalidade_texto = "Período neutro de transição."
+    sazonalidade_texto = "Período neutro de transição logística."
     if mes_atual in [4, 5, 6, 7]:
-        sazonalidade_texto = "📈 Plantio nos EUA. Histórico de alta por prêmio de risco climático (64% de alta)."
+        sazonalidade_texto = "📈 Plantio nos EUA: Histórico de volatilidade por prêmio de risco climático."
         score_futuro += 14.0 
     elif mes_atual in [9, 10, 11]:
-        sazonalidade_texto = "📉 Entrada da Colheita física. Histórico de aumento de oferta."
+        sazonalidade_texto = "📉 Entrada da Colheita física: Histórico de aumento de oferta no mercado físico."
         score_futuro -= 15.0 
         
-    score_futuro += 10.0 
+    score_futuro += 10.0 # Peso estável do Consumo Global
     score_futuro = max(5.0, min(95.0, score_futuro))
     
     if score_futuro >= 55.0:
@@ -358,21 +397,24 @@ with tab_fut:
     else:
         cor_fut, txt_fut = "#fccf03", f"PROJEÇÃO NEUTRA: {score_futuro:.1f}%"
 
+    # Exibição do Painel Dinâmico
     st.markdown(f"""
         <div class="future-header" style="background-color: rgba(0,0,0,0.3); border-color: {cor_fut}; color: {cor_fut};">
-            🔮 RADAR DE PROJEÇÃO MACRO: {txt_fut}
+            🔮 RADAR DE PROJEÇÃO MACRO AUTOMÁTICO: {txt_fut}
         </div>
         """, unsafe_allow_html=True)
     
     cf1, cf2, cf3 = st.columns(3)
     
     with cf1:
-        st.markdown("""
+        cor_peso = "#00CF85" if peso_clima >= 0 else "#ff4b4b"
+        sinal_peso = "+" if peso_clima >= 0 else ""
+        st.markdown(f"""
         <div class="future-box">
-            <h4 style='color:#58a6ff; margin:0;'>🌦️ Previsão Climática (7 Dias)</h4>
-            <p style='margin-top:10px; font-size:14px;'><b>Região:</b> Texas Panhandle<br>
-            <b>Tendência:</b> Massa de ar seco avançando nas próximas 168 hours.<br>
-            <span style='color:#00CF85;'>➔ Peso no Modelo: +15% de Viés de Alta</span></p>
+            <h4 style='color:#58a6ff; margin:0;'>🌦️ Análise Climática em Tempo Real</h4>
+            <p style='margin-top:10px; font-size:14px;'><b>Região:</b> Texas Panhandle (Lubbock)<br>
+            <b>Análise de Impacto:</b> {status_clima_futuro}<br>
+            <span style='color:{cor_peso}; font-weight:bold;'>➔ Impacto no Modelo: {sinal_peso}{peso_clima}% no viés de preço</span></p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -381,8 +423,8 @@ with tab_fut:
         <div class="future-box">
             <h4 style='color:#ff9f43; margin:0;'>📅 Sazonalidade do Mês</h4>
             <p style='margin-top:10px; font-size:14px;'><b>Mês Corrente:</b> {datetime.now().strftime('%B')}<br>
-            <b>Histórico:</b> {sazonalidade_texto}<br>
-            <span style='color:#00CF85;'>➔ Peso no Modelo: +14% de Probabilidade</span></p>
+            <b>Histórico Histórico:</b> {sazonalidade_texto}<br>
+            <span style='color:#00CF85; font-weight:bold;'>➔ Sazonalidade Ativa no Cálculo</span></p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -392,7 +434,7 @@ with tab_fut:
             <h4 style='color:#ff4b4b; margin:0;'>🏛️ Agenda e Relatórios (USDA)</h4>
             <p style='margin-top:10px; font-size:14px;'><b>Consumo Global:</b> China e Índia projetam aumento de demanda têxtil de 1.2%.<br>
             <b>Aviso:</b> Evitar ordens pesadas na ActivTrades no dia de saída do WASDE.<br>
-            <span style='color:#00CF85;'>➔ Peso no Modelo: +10% de Viés Altista</span></p>
+            <span style='color:#00CF85; font-weight:bold;'>➔ Peso no Modelo: +10% de Viés Altista</span></p>
         </div>
         """, unsafe_allow_html=True)
 
